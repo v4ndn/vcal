@@ -1,0 +1,729 @@
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import { Plus, Search, FileText, Folder, FolderOpen, BookOpen, Trash2, Pencil } from 'lucide-react';
+import * as LucideIcons from 'lucide-react';
+import { useCalendarStore } from '../entities/calendar/model/store';
+import { useUIStore } from '../entities/ui/model/store';
+import { getJournals, buildJournalTree } from '../shared/lib/getJournals';
+import type { JournalNode, JournalFolder, JournalTreeRoot } from '../shared/lib/getJournals';
+import type { CalendarJournal } from '../entities/journal/model/types';
+import { MarkdownEditor } from '../shared/ui/MarkdownEditor';
+import ContextMenu from '../shared/ui/ContextMenu';
+import ConfirmModal from '../shared/ui/ConfirmModal';
+import JournalNoteModal from '../widgets/JournalNoteModal/JournalNoteModal';
+
+// ── types ─────────────────────────────────────────────────────────────────────
+
+type CtxTarget =
+  | { kind: 'note'; journal: CalendarJournal }
+  | { kind: 'folder'; node: JournalFolder };
+
+type CtxState = { x: number; y: number } & CtxTarget;
+
+type SelectionTarget =
+  | { kind: 'note'; uid: string }
+  | { kind: 'folder'; path: string; collectionName: string };
+
+type DragSource =
+  | { kind: 'note'; journal: CalendarJournal }
+  | { kind: 'folder'; node: JournalFolder; collectionName: string };
+
+interface DragPayload {
+  notes: CalendarJournal[];
+  folders: Array<{ node: JournalFolder; collectionName: string }>;
+}
+
+interface DropTarget {
+  collectionName: string;
+  folderPath: string | null; // null = collection root
+}
+
+interface DndProps {
+  selectedNoteUids: Set<string>;
+  selectedFolderKeys: Set<string>;
+  onShiftClick: (t: SelectionTarget) => void;
+  onDragStart: (e: React.DragEvent, src: DragSource) => void;
+  onDragEnd: () => void;
+  dropTarget: DropTarget | null;
+  onDragOver: (e: React.DragEvent, t: DropTarget) => void;
+  onDrop: (e: React.DragEvent, t: DropTarget) => void;
+  onDragLeave: () => void;
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+function nodeMatchesSearch(node: JournalNode, q: string): boolean {
+  if (q === '') return true;
+  if (node.kind === 'note') return node.name.toLowerCase().includes(q) || node.journal.summary.toLowerCase().includes(q);
+  return node.children.some((c) => nodeMatchesSearch(c, q));
+}
+
+function filterNodes(nodes: JournalNode[], q: string): JournalNode[] {
+  if (q === '') return nodes;
+  return nodes
+    .filter((n) => nodeMatchesSearch(n, q))
+    .map((n) => {
+      if (n.kind === 'folder') return { ...n, children: filterNodes(n.children, q) };
+      return n;
+    });
+}
+
+function collectLeafUids(node: JournalNode): string[] {
+  if (node.kind === 'note') return [node.journal.uid];
+  return node.children.flatMap(collectLeafUids);
+}
+
+function findFolderByPath(nodes: JournalNode[], path: string): JournalFolder | null {
+  for (const n of nodes) {
+    if (n.kind === 'folder') {
+      if (n.path === path) return n;
+      const found = findFolderByPath(n.children, path);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// ── TreeNode ──────────────────────────────────────────────────────────────────
+
+interface TreeNodeProps {
+  node: JournalNode;
+  depth: number;
+  collectionName: string;
+  selectedUid: string | null;
+  onSelect: (j: CalendarJournal) => void;
+  onCreate: (prefixPath: string) => void;
+  onContextMenu: (e: React.MouseEvent, target: CtxTarget) => void;
+  forceOpen?: boolean;
+  dnd: DndProps;
+}
+
+function TreeNode({ node, depth, collectionName, selectedUid, onSelect, onCreate, onContextMenu, forceOpen, dnd }: TreeNodeProps) {
+  const [open, setOpen] = useState(true);
+  const isOpen = forceOpen ? true : open;
+  const indent = depth * 12;
+
+  if (node.kind === 'note') {
+    const isSelected = selectedUid === node.journal.uid;
+    const isMultiSelected = dnd.selectedNoteUids.has(node.journal.uid);
+    const CustomIcon = node.journal.icon ? (LucideIcons as Record<string, any>)[node.journal.icon] : null;
+
+    return (
+      <button
+        draggable
+        onClick={(e) => {
+          if (e.shiftKey) { e.preventDefault(); dnd.onShiftClick({ kind: 'note', uid: node.journal.uid }); }
+          else onSelect(node.journal);
+        }}
+        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, { kind: 'note', journal: node.journal }); }}
+        onDragStart={(e) => { e.stopPropagation(); dnd.onDragStart(e, { kind: 'note', journal: node.journal }); }}
+        onDragEnd={() => dnd.onDragEnd()}
+        className={`w-full flex items-center gap-1.5 py-1 pr-2 rounded-lg text-left transition-all text-xs font-medium
+          ${isSelected ? 'bg-th-subtle text-th-text' : ''}
+          ${isMultiSelected && !isSelected ? 'bg-th-accent/10 text-th-text ring-1 ring-inset ring-th-accent/40' : ''}
+          ${!isSelected && !isMultiSelected ? 'text-th-muted hover:text-th-text hover:bg-th-hover' : ''}`}
+        style={{ paddingLeft: indent + 8 }}
+      >
+        {CustomIcon
+          ? <CustomIcon size={12} className="shrink-0 opacity-70" />
+          : <FileText size={12} className="shrink-0 opacity-60" />
+        }
+        <span className="flex-1 truncate">{node.name}</span>
+      </button>
+    );
+  }
+
+  // Folder
+  const folderKey = `${collectionName}:::${node.path}`;
+  const isFolderSelected = dnd.selectedFolderKeys.has(folderKey);
+  const isDropTarget = dnd.dropTarget?.collectionName === collectionName && dnd.dropTarget?.folderPath === node.path;
+
+  return (
+    <div
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); dnd.onDragOver(e, { collectionName, folderPath: node.path }); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dnd.onDrop(e, { collectionName, folderPath: node.path }); }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { e.stopPropagation(); dnd.onDragLeave(); } }}
+    >
+      <button
+        draggable
+        onClick={(e) => {
+          if (e.shiftKey) { e.preventDefault(); dnd.onShiftClick({ kind: 'folder', path: node.path, collectionName }); }
+          else setOpen((v) => !v);
+        }}
+        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, { kind: 'folder', node }); }}
+        onDragStart={(e) => { e.stopPropagation(); dnd.onDragStart(e, { kind: 'folder', node, collectionName }); }}
+        onDragEnd={() => dnd.onDragEnd()}
+        className={`group w-full flex items-center gap-1.5 py-1 pr-2 rounded-lg text-left transition-all text-xs font-medium
+          ${isFolderSelected ? 'bg-th-accent/10 text-th-text ring-1 ring-inset ring-th-accent/40' : 'text-th-muted hover:text-th-text hover:bg-th-hover'}
+          ${isDropTarget ? '!ring-1 !ring-inset !ring-th-accent !bg-th-accent/15' : ''}`}
+        style={{ paddingLeft: indent + 8 }}
+      >
+        {isOpen
+          ? <FolderOpen size={12} className="shrink-0 opacity-60" />
+          : <Folder size={12} className="shrink-0 opacity-60" />
+        }
+        <span className="flex-1 truncate">{node.name}</span>
+        <span
+          role="button"
+          onClick={(e) => { e.stopPropagation(); onCreate(node.path); }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-th-border text-th-muted"
+          title="New note in this folder"
+        >
+          <Plus size={10} />
+        </span>
+      </button>
+      <AnimatePresence initial={false}>
+        {isOpen && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.12, ease: 'easeInOut' }}
+            className="overflow-hidden"
+          >
+            {node.children.map((child) => (
+              <TreeNode
+                key={child.kind === 'note' ? child.journal.uid : child.path}
+                node={child}
+                depth={depth + 1}
+                collectionName={collectionName}
+                selectedUid={selectedUid}
+                onSelect={onSelect}
+                onCreate={onCreate}
+                onContextMenu={onContextMenu}
+                forceOpen={forceOpen}
+                dnd={dnd}
+              />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── CollectionSection ─────────────────────────────────────────────────────────
+
+interface CollectionSectionProps {
+  root: JournalTreeRoot;
+  selectedUid: string | null;
+  onSelect: (j: CalendarJournal) => void;
+  onCreate: (prefixPath: string, collectionName?: string) => void;
+  onContextMenu: (e: React.MouseEvent, target: CtxTarget) => void;
+  searchQuery: string;
+  dnd: DndProps;
+}
+
+function CollectionSection({ root, selectedUid, onSelect, onCreate, onContextMenu, searchQuery, dnd }: CollectionSectionProps) {
+  const [open, setOpen] = useState(true);
+  const filteredChildren = useMemo(() => filterNodes(root.children, searchQuery), [root.children, searchQuery]);
+  const forceOpen = searchQuery !== '';
+  const isDropTarget = dnd.dropTarget?.collectionName === root.collectionName && dnd.dropTarget?.folderPath === null;
+
+  return (
+    <div
+      className="mb-1"
+      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); dnd.onDragOver(e, { collectionName: root.collectionName, folderPath: null }); }}
+      onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dnd.onDrop(e, { collectionName: root.collectionName, folderPath: null }); }}
+      onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { e.stopPropagation(); dnd.onDragLeave(); } }}
+    >
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-all hover:bg-th-hover
+          ${isDropTarget ? 'ring-1 ring-inset ring-th-accent bg-th-accent/15' : ''}`}
+      >
+        <BookOpen size={12} className="text-th-muted shrink-0" />
+        <span className="flex-1 text-xs font-semibold text-th-text truncate">{root.collectionName}</span>
+        <span
+          role="button"
+          onClick={(e) => { e.stopPropagation(); onCreate('', root.collectionName); }}
+          className="opacity-0 group-hover:opacity-100 transition-opacity w-4 h-4 flex items-center justify-center rounded hover:bg-th-border text-th-muted"
+          title="New note in this journal"
+        >
+          <Plus size={10} />
+        </span>
+      </button>
+      <AnimatePresence initial={false}>
+        {(forceOpen || open) && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.12 }}
+            className="overflow-hidden"
+          >
+            {filteredChildren.length === 0 && (
+              <p className="px-4 py-2 text-[11px] text-th-muted/50">No notes</p>
+            )}
+            {filteredChildren.map((node) => (
+              <TreeNode
+                key={node.kind === 'note' ? node.journal.uid : node.path}
+                node={node}
+                depth={0}
+                collectionName={root.collectionName}
+                selectedUid={selectedUid}
+                onSelect={onSelect}
+                onCreate={(path) => onCreate(path, root.collectionName)}
+                onContextMenu={onContextMenu}
+                forceOpen={forceOpen}
+                dnd={dnd}
+              />
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── NoteEditor ────────────────────────────────────────────────────────────────
+
+interface NoteEditorProps {
+  journal: CalendarJournal;
+  onDelete: () => void;
+}
+
+function NoteEditor({ journal, onDelete }: NoteEditorProps) {
+  const updateJournal = useCalendarStore((s) => s.updateJournal);
+
+  const [title, setTitle] = useState(journal.summary);
+  const [body, setBody] = useState(journal.description);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const bodyRef = useRef(body);
+  bodyRef.current = body;
+
+  useEffect(() => {
+    setTitle(journal.summary);
+    setBody(journal.description);
+    setDirty(false);
+  }, [journal.uid]);
+
+  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTitle(e.target.value);
+    setDirty(true);
+  };
+
+  const handleBodyChange = useCallback((v: string) => {
+    setBody(v);
+    setDirty(true);
+  }, []);
+
+  const handleSave = async () => {
+    if (!title.trim()) return;
+    setSaving(true);
+    try {
+      await updateJournal(journal.uid, { summary: title.trim(), description: bodyRef.current });
+      setDirty(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const bodyWrapRef = useRef<HTMLDivElement>(null);
+
+  function focusEditorAtEnd() {
+    const el = bodyWrapRef.current?.querySelector<HTMLElement>('[contenteditable]');
+    if (!el) return;
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    range.collapse(false);
+    const sel = window.getSelection();
+    sel?.removeAllRanges();
+    sel?.addRange(range);
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 px-6 py-4 border-b border-th-border shrink-0">
+        <input
+          value={title}
+          onChange={handleTitleChange}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
+          className="flex-1 text-base font-semibold text-th-text bg-transparent outline-none placeholder-th-muted/40 min-w-0"
+          placeholder="Note title (use / for folders)"
+        />
+        <div className="flex items-center gap-1.5 shrink-0">
+          {dirty && (
+            <button
+              onClick={handleSave}
+              disabled={saving || !title.trim()}
+              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-th-accent text-th-accent-fg hover:opacity-90 disabled:opacity-40 transition-opacity"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
+          <button
+            onClick={onDelete}
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-red-500 hover:bg-th-hover transition-colors"
+            title="Delete note"
+          >
+            <Trash2 size={14} />
+          </button>
+        </div>
+      </div>
+      <div
+        ref={bodyWrapRef}
+        className="flex-1 overflow-y-auto px-6 py-4 cursor-text"
+        onClick={(e) => {
+          if ((e.target as HTMLElement).closest('[contenteditable]')) return;
+          focusEditorAtEnd();
+        }}
+      >
+        <MarkdownEditor
+          key={journal.uid}
+          defaultValue={body}
+          onChange={handleBodyChange}
+          placeholder="Start writing…"
+          className="min-h-full"
+        />
+      </div>
+    </div>
+  );
+}
+
+// ── JournalPage ───────────────────────────────────────────────────────────────
+
+export default function JournalPage() {
+  const storedJournals = useCalendarStore((s) => s.journals);
+  const allCalendars = useCalendarStore((s) => s.calendars);
+  const deleteJournal = useCalendarStore((s) => s.deleteJournal);
+  const updateJournal = useCalendarStore((s) => s.updateJournal);
+  const calendars = allCalendars.filter((c) => c.isJournal);
+  const selectedCollection = useUIStore((s) => s.selectedJournalCollection);
+
+  const journals = useMemo(() => getJournals(storedJournals), [storedJournals]);
+  const filteredJournals = useMemo(
+    () => selectedCollection ? journals.filter((j) => j.calendarName === selectedCollection) : journals,
+    [journals, selectedCollection],
+  );
+  const tree = useMemo(() => buildJournalTree(filteredJournals), [filteredJournals]);
+
+  // View state
+  const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [showModal, setShowModal] = useState(false);
+  const [modalPrefill, setModalPrefill] = useState<{ title: string; calendarName: string }>({ title: '', calendarName: '' });
+  const [editingJournal, setEditingJournal] = useState<CalendarJournal | null>(null);
+  const [ctx, setCtx] = useState<CtxState | null>(null);
+  const [confirm, setConfirm] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+
+  // Selection state
+  const [selectedNoteUids, setSelectedNoteUids] = useState<Set<string>>(new Set());
+  const [selectedFolderKeys, setSelectedFolderKeys] = useState<Set<string>>(new Set());
+
+  // DnD state
+  const dragPayloadRef = useRef<DragPayload | null>(null);
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null);
+  const dragLeaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const selectedJournal = useMemo(
+    () => journals.find((j) => j.uid === selectedUid) ?? null,
+    [journals, selectedUid],
+  );
+
+  // ── handlers ───────────────────────────────────────────────────────────────
+
+  const handleSelect = (j: CalendarJournal) => {
+    setSelectedNoteUids(new Set());
+    setSelectedFolderKeys(new Set());
+    setSelectedUid(j.uid);
+  };
+
+  const handleCreate = (prefixPath: string, collectionName?: string) => {
+    const prefix = prefixPath ? `${prefixPath}/` : '';
+    const defaultCal = collectionName ?? calendars[0]?.name ?? '';
+    setModalPrefill({ title: prefix, calendarName: defaultCal });
+    setShowModal(true);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent, target: CtxTarget) => {
+    setCtx({ x: e.clientX, y: e.clientY, ...target });
+  };
+
+  const requestConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirm({ title, message, onConfirm });
+  };
+
+  const handleDeleteNote = (journal: CalendarJournal) => {
+    requestConfirm(
+      'Delete note',
+      `"${journal.summary}" will be permanently deleted.`,
+      async () => {
+        await deleteJournal(journal.uid);
+        if (selectedUid === journal.uid) setSelectedUid(null);
+      },
+    );
+  };
+
+  const handleDeleteFolder = (node: JournalFolder) => {
+    const uids = collectLeafUids(node);
+    if (!uids.length) return;
+    const count = uids.length;
+    requestConfirm(
+      `Delete "${node.name}"`,
+      `This will permanently delete ${count} note${count > 1 ? 's' : ''} inside this folder.`,
+      async () => {
+        await Promise.all(uids.map((uid) => deleteJournal(uid)));
+        if (selectedUid && uids.includes(selectedUid)) setSelectedUid(null);
+      },
+    );
+  };
+
+  // ── selection ──────────────────────────────────────────────────────────────
+
+  const handleShiftClick = (t: SelectionTarget) => {
+    if (t.kind === 'note') {
+      setSelectedNoteUids((prev) => {
+        const next = new Set(prev);
+        if (next.has(t.uid)) next.delete(t.uid); else next.add(t.uid);
+        return next;
+      });
+    } else {
+      const key = `${t.collectionName}:::${t.path}`;
+      setSelectedFolderKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(key)) next.delete(key); else next.add(key);
+        return next;
+      });
+    }
+  };
+
+  // ── drag and drop ──────────────────────────────────────────────────────────
+
+  const buildSelectedFolders = useCallback((keys: Set<string>): Array<{ node: JournalFolder; collectionName: string }> => {
+    return [...keys].flatMap((key) => {
+      const sep = key.indexOf(':::');
+      const collection = key.slice(0, sep);
+      const path = key.slice(sep + 3);
+      const treeRoot = tree.find((r) => r.collectionName === collection);
+      if (!treeRoot) return [];
+      const folder = findFolderByPath(treeRoot.children, path);
+      if (!folder) return [];
+      return [{ node: folder, collectionName: collection }];
+    });
+  }, [tree]);
+
+  const handleDragStart = (e: React.DragEvent, src: DragSource) => {
+    e.dataTransfer.effectAllowed = 'move';
+    // Provide minimal text so the browser shows a drag ghost
+    e.dataTransfer.setData('text/plain', src.kind === 'note' ? src.journal.summary : src.node.name);
+
+    const srcInSelection =
+      src.kind === 'note'
+        ? selectedNoteUids.has(src.journal.uid)
+        : selectedFolderKeys.has(`${src.collectionName}:::${src.node.path}`);
+
+    if (srcInSelection && (selectedNoteUids.size + selectedFolderKeys.size) > 1) {
+      dragPayloadRef.current = {
+        notes: journals.filter((j) => selectedNoteUids.has(j.uid)),
+        folders: buildSelectedFolders(selectedFolderKeys),
+      };
+    } else {
+      dragPayloadRef.current =
+        src.kind === 'note'
+          ? { notes: [src.journal], folders: [] }
+          : { notes: [], folders: [{ node: src.node, collectionName: src.collectionName }] };
+    }
+  };
+
+  const handleDragEnd = () => {
+    dragPayloadRef.current = null;
+    setDropTarget(null);
+  };
+
+  const handleDragOver = (_e: React.DragEvent, target: DropTarget) => {
+    if (dragLeaveTimerRef.current) clearTimeout(dragLeaveTimerRef.current);
+    setDropTarget(target);
+  };
+
+  const handleDragLeave = () => {
+    dragLeaveTimerRef.current = setTimeout(() => setDropTarget(null), 30);
+  };
+
+  const handleDrop = async (_e: React.DragEvent, target: DropTarget) => {
+    if (dragLeaveTimerRef.current) clearTimeout(dragLeaveTimerRef.current);
+    setDropTarget(null);
+
+    const payload = dragPayloadRef.current;
+    if (!payload) return;
+    dragPayloadRef.current = null;
+
+    const ops: Promise<void>[] = [];
+
+    for (const note of payload.notes) {
+      const leaf = note.summary.split('/').pop() ?? note.summary;
+      const newSummary = target.folderPath ? `${target.folderPath}/${leaf}` : leaf;
+      const targetCal = target.collectionName !== note.calendarName ? target.collectionName : undefined;
+      if (newSummary !== note.summary || targetCal) {
+        ops.push(updateJournal(note.uid, { summary: newSummary, description: note.description, icon: note.icon }, targetCal));
+      }
+    }
+
+    for (const { node: folderNode, collectionName } of payload.folders) {
+      // Skip if dropping onto itself or its own subtree
+      if (target.collectionName === collectionName && target.folderPath !== null) {
+        if (target.folderPath === folderNode.path) continue;
+        if (target.folderPath.startsWith(folderNode.path + '/')) continue;
+      }
+      const folderName = folderNode.path.split('/').pop() ?? folderNode.path;
+      const leafUids = collectLeafUids(folderNode);
+      for (const uid of leafUids) {
+        const note = journals.find((j) => j.uid === uid);
+        if (!note) continue;
+        const suffix = note.summary.slice(folderNode.path.length + 1);
+        const newSummary = target.folderPath
+          ? `${target.folderPath}/${folderName}/${suffix}`
+          : `${folderName}/${suffix}`;
+        const targetCal = target.collectionName !== note.calendarName ? target.collectionName : undefined;
+        if (newSummary !== note.summary || targetCal) {
+          ops.push(updateJournal(note.uid, { summary: newSummary, description: note.description, icon: note.icon }, targetCal));
+        }
+      }
+    }
+
+    await Promise.all(ops);
+    setSelectedNoteUids(new Set());
+    setSelectedFolderKeys(new Set());
+  };
+
+  const dnd: DndProps = {
+    selectedNoteUids,
+    selectedFolderKeys,
+    onShiftClick: handleShiftClick,
+    onDragStart: handleDragStart,
+    onDragEnd: handleDragEnd,
+    dropTarget,
+    onDragOver: handleDragOver,
+    onDrop: handleDrop,
+    onDragLeave: handleDragLeave,
+  };
+
+  // ── context menu items ────────────────────────────────────────────────────
+
+  const searchQuery = search.toLowerCase();
+
+  const ctxItems = ctx
+    ? ctx.kind === 'note'
+      ? [
+          { label: 'Edit', icon: <Pencil size={14} />, onClick: () => setEditingJournal(ctx.journal) },
+          { label: 'Delete', icon: <Trash2 size={14} />, danger: true, onClick: () => handleDeleteNote(ctx.journal) },
+        ]
+      : [
+          { label: 'Delete folder', icon: <Trash2 size={14} />, danger: true, onClick: () => handleDeleteFolder(ctx.node) },
+        ]
+    : [];
+
+  return (
+    <div className="flex h-full overflow-hidden bg-th-bg">
+      {/* Left: tree panel */}
+      <div className="w-56 shrink-0 flex flex-col border-r border-th-border bg-th-surface">
+        <div className="flex items-center gap-1.5 px-2 py-2 border-b border-th-border">
+          <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-th-subtle border border-th-border text-xs">
+            <Search size={11} className="text-th-muted shrink-0" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search notes…"
+              className="flex-1 bg-transparent outline-none text-th-text placeholder-th-muted/50 min-w-0"
+            />
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-1 px-1 relative">
+          {tree.length === 0 && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-th-muted/50">
+              <BookOpen size={28} strokeWidth={1.5} />
+              <p className="text-xs text-center px-4 leading-relaxed">No journal entries yet.</p>
+              <button
+                onClick={() => handleCreate('', calendars[0]?.name ?? '')}
+                className="w-8 h-8 flex items-center justify-center rounded-full border border-th-border text-th-muted hover:text-th-text hover:bg-th-hover transition-colors"
+                title="New note"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+          )}
+          {tree.map((root) => (
+            <CollectionSection
+              key={root.collectionName}
+              root={root}
+              selectedUid={selectedUid}
+              onSelect={handleSelect}
+              onCreate={handleCreate}
+              onContextMenu={handleContextMenu}
+              searchQuery={searchQuery}
+              dnd={dnd}
+            />
+          ))}
+        </div>
+      </div>
+
+      {/* Right: note content */}
+      <div className="flex-1 min-w-0 overflow-hidden">
+        {selectedJournal ? (
+          <NoteEditor
+            key={selectedJournal.uid}
+            journal={selectedJournal}
+            onDelete={() => handleDeleteNote(selectedJournal)}
+          />
+        ) : (
+          <div className="h-full flex flex-col items-center justify-center gap-3 text-th-muted/40">
+            <BookOpen size={40} strokeWidth={1} />
+            <p className="text-sm">Select a note to view it</p>
+          </div>
+        )}
+      </div>
+
+      {/* Confirm modal */}
+      <AnimatePresence>
+        {confirm && (
+          <ConfirmModal
+            title={confirm.title}
+            message={confirm.message}
+            onConfirm={confirm.onConfirm}
+            onClose={() => setConfirm(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Context menu */}
+      <AnimatePresence>
+        {ctx && (
+          <ContextMenu
+            x={ctx.x}
+            y={ctx.y}
+            items={ctxItems}
+            onClose={() => setCtx(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Create modal */}
+      <AnimatePresence>
+        {showModal && (
+          <JournalNoteModal
+            mode="create"
+            initialTitle={modalPrefill.title}
+            initialCalendar={modalPrefill.calendarName}
+            onClose={() => setShowModal(false)}
+            onCreated={(uid) => { setShowModal(false); setSelectedUid(uid); }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Edit modal */}
+      <AnimatePresence>
+        {editingJournal && (
+          <JournalNoteModal
+            mode="edit"
+            journal={editingJournal}
+            onClose={() => setEditingJournal(null)}
+            onSaved={() => setEditingJournal(null)}
+          />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}

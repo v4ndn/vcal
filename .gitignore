@@ -1,0 +1,36 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+.env
+package-lock.json
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Design sync artifacts
+.design-sync/
+.storybook/
+.ds-sync/
+ds-bundle/
+storybook-static/
+
+# Local memory
+memory/
