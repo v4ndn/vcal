@@ -4,6 +4,7 @@ import { Plus, Search, FileText, Folder, FolderOpen, BookOpen, Trash2, Pencil } 
 import * as LucideIcons from 'lucide-react';
 import { useCalendarStore } from '../entities/calendar/model/store';
 import { useUIStore } from '../entities/ui/model/store';
+import { useThemeStore } from '../entities/theme/model/store';
 import { getJournals, buildJournalTree } from '../shared/lib/getJournals';
 import type { JournalNode, JournalFolder, JournalTreeRoot } from '../shared/lib/getJournals';
 import type { CalendarJournal } from '../entities/journal/model/types';
@@ -393,6 +394,39 @@ export default function JournalPage() {
   const calendars = allCalendars.filter((c) => c.isJournal);
   const selectedCollection = useUIStore((s) => s.selectedJournalCollection);
 
+  const sidebarSide = useThemeStore((s) => s.sidebarSide);
+  const storedPanelWidth = useThemeStore((s) => s.journalSidebarWidth);
+  const setJournalSidebarWidth = useThemeStore((s) => s.setJournalSidebarWidth);
+  const [panelWidth, setPanelWidth] = useState(storedPanelWidth);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartW = useRef(0);
+  const currentWidthRef = useRef(storedPanelWidth);
+
+  function startResize(e: React.PointerEvent<HTMLDivElement>) {
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartW.current = panelWidth;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  }
+
+  function onResizeMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!isDragging.current) return;
+    const delta = sidebarSide === 'right'
+      ? dragStartX.current - e.clientX
+      : e.clientX - dragStartX.current;
+    const w = Math.max(160, Math.min(480, dragStartW.current + delta));
+    currentWidthRef.current = w;
+    setPanelWidth(w);
+  }
+
+  function stopResize() {
+    if (!isDragging.current) return;
+    isDragging.current = false;
+    setJournalSidebarWidth(currentWidthRef.current);
+  }
+
   const journals = useMemo(() => getJournals(storedJournals), [storedJournals]);
   const filteredJournals = useMemo(
     () => selectedCollection ? journals.filter((j) => j.calendarName === selectedCollection) : journals,
@@ -616,9 +650,9 @@ export default function JournalPage() {
     : [];
 
   return (
-    <div className="flex h-full overflow-hidden bg-th-bg">
+    <div className={`flex h-full overflow-hidden bg-th-bg ${sidebarSide === 'right' ? 'flex-row-reverse' : ''}`}>
       {/* Left: tree panel */}
-      <div className="w-56 shrink-0 flex flex-col border-r border-th-border bg-th-surface">
+      <div style={{ width: panelWidth }} className={`shrink-0 flex flex-col ${sidebarSide === 'right' ? 'border-l' : 'border-r'} border-th-border bg-th-surface relative`}>
         <div className="flex items-center gap-1.5 px-2 py-2 border-b border-th-border">
           <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-th-subtle border border-th-border text-xs">
             <Search size={11} className="text-th-muted shrink-0" />
@@ -658,6 +692,14 @@ export default function JournalPage() {
             />
           ))}
         </div>
+        {/* Resize handle */}
+        <div
+          onPointerDown={startResize}
+          onPointerMove={onResizeMove}
+          onPointerUp={stopResize}
+          onPointerCancel={stopResize}
+          className={`absolute inset-y-0 ${sidebarSide === 'right' ? 'left-0' : 'right-0'} w-1 cursor-col-resize hover:bg-th-accent/40 active:bg-th-accent/60 transition-colors z-10`}
+        />
       </div>
 
       {/* Right: note content */}

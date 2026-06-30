@@ -5,9 +5,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   CalendarDays, ListTodo, Check, LogOut, RefreshCw,
   GripVertical, Plus, X, ChevronLeft, ChevronDown,
-  Bookmark, LayoutList, Palette, BookOpen,
+  Bookmark, LayoutList, Settings, BookOpen,
 } from 'lucide-react';
-import ThemePreferences from '../ThemePreferences/ThemePreferences';
+import Preferences from '../ThemePreferences/ThemePreferences';
 import { useUIStore } from '../../entities/ui/model/store';
 import { useCalendarStore } from '../../entities/calendar/model/store';
 import { useAuthStore } from '../../entities/auth/model/store';
@@ -104,6 +104,8 @@ export default function CalendarSidebar() {
 
   const setSelectedDate = useTasksStore((s) => s.setSelectedDate);
   const HOUR_HEIGHT = useThemeStore((s) => s.hourHeight);
+  const sidebarCompact = useThemeStore((s) => s.sidebarCompact);
+  const sidebarSide = useThemeStore((s) => s.sidebarSide);
   const SNAP_VH = HOUR_HEIGHT / 4;
 
   const [showSaveForm, setShowSaveForm] = useState(false);
@@ -190,21 +192,81 @@ export default function CalendarSidebar() {
 
   return (
     <>
-    <aside className={`w-52 shrink-0 h-full flex flex-col border-r border-th-border bg-th-surface
-      fixed inset-y-0 left-0 z-40 transition-transform duration-200
+    <aside className={`${sidebarCompact ? 'w-14' : 'w-52'} shrink-0 h-full flex flex-col ${sidebarSide === 'right' ? 'border-l' : 'border-r'} border-th-border bg-th-surface
+      fixed inset-y-0 ${sidebarSide === 'right' ? 'right-0' : 'left-0'} z-40 transition-all duration-200
       md:static md:translate-x-0
-      ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      ${sidebarOpen ? 'translate-x-0' : sidebarSide === 'right' ? 'translate-x-full' : '-translate-x-full'}`}>
 
+      {sidebarCompact ? (
+        <div className="flex flex-col h-full overflow-hidden">
+          {/* Compact: action buttons */}
+          <div className="flex flex-col items-center gap-0.5 px-1 py-2 border-b border-th-border shrink-0">
+            <button onClick={() => setShowThemePrefs(true)} title="Preferences" className="w-8 h-8 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors">
+              <Settings size={14} />
+            </button>
+            <button onClick={() => fetch().catch(console.error)} disabled={loading} title="Refresh" className="w-8 h-8 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors disabled:opacity-30">
+              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+            </button>
+            <button onClick={clearConfig} title="Disconnect" className="w-8 h-8 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors">
+              <LogOut size={14} />
+            </button>
+            <button onClick={() => setSidebarOpen(false)} title="Close" className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors">
+              <ChevronLeft size={14} />
+            </button>
+          </div>
+          {/* Compact: nav links */}
+          <div className="flex flex-col items-center gap-0.5 px-1 py-2 border-b border-th-border">
+            {NAV_ITEMS.map(({ to, label, icon: Icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end
+                title={label}
+                className={({ isActive }) =>
+                  `w-8 h-8 flex items-center justify-center rounded-lg transition-colors ${
+                    isActive ? 'bg-th-subtle text-th-text' : 'text-th-muted hover:text-th-text hover:bg-th-hover'
+                  }`
+                }
+              >
+                <Icon size={16} />
+              </NavLink>
+            ))}
+          </div>
+          {/* Compact: calendar toggles */}
+          {(isCalendarRoute || isTasksRoute) && (
+            <div className="flex flex-col items-center gap-1.5 px-1 py-2">
+              {calendarsMeta.filter((c) => !c.isJournal).map(({ name, color }) => {
+                const visible = !hiddenCalendars.has(name);
+                return (
+                  <button
+                    key={name}
+                    onClick={() => toggleCalendar(name)}
+                    title={name}
+                    className="w-4 h-4 rounded-[3px] border-2 flex items-center justify-center transition-all shrink-0"
+                    style={{
+                      backgroundColor: visible ? (color ?? '#9ca3af') : 'transparent',
+                      borderColor: visible ? (color ?? '#9ca3af') : '#d1d5db',
+                    }}
+                  >
+                    {visible && <Check size={9} strokeWidth={3} className="text-white" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-th-border shrink-0 h-[49px]">
         <span className="text-sm font-bold tracking-tight text-th-text">vcalendar</span>
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => setShowThemePrefs(true)}
-            title="Theme preferences"
+            title="Preferences"
             className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors"
           >
-            <Palette size={12} />
+            <Settings size={12} />
           </button>
           <button
             onClick={() => fetch().catch(console.error)}
@@ -395,10 +457,12 @@ export default function CalendarSidebar() {
         )}
 
       </div>
+        </>
+      )}
     </aside>
 
     <AnimatePresence>
-      {showThemePrefs && <ThemePreferences onClose={() => setShowThemePrefs(false)} />}
+      {showThemePrefs && <Preferences onClose={() => setShowThemePrefs(false)} />}
     </AnimatePresence>
     </>
   );

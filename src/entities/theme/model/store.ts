@@ -71,10 +71,20 @@ interface ThemeStore {
   activeId: string;
   custom: ThemeValues;
   hourHeight: number;
+  sidebarCompact: boolean;
+  sidebarSide: 'left' | 'right';
+  calendarHeaderBottom: boolean;
+  hideScrollbars: boolean;
+  journalSidebarWidth: number;
   setActiveId: (id: string) => void;
   applyPreset: (preset: PresetTheme) => void;
   setCustomValue: (key: keyof ThemeValues, value: string) => void;
   setHourHeight: (vh: number) => void;
+  setSidebarCompact: (v: boolean) => void;
+  setSidebarSide: (side: 'left' | 'right') => void;
+  setCalendarHeaderBottom: (v: boolean) => void;
+  setHideScrollbars: (v: boolean) => void;
+  setJournalSidebarWidth: (w: number) => void;
 }
 
 export const useThemeStore = create<ThemeStore>()(
@@ -83,6 +93,11 @@ export const useThemeStore = create<ThemeStore>()(
       activeId: 'light',
       custom: { ...PRESET_THEMES[0].values },
       hourHeight: 10,
+      sidebarCompact: false,
+      sidebarSide: 'left' as const,
+      calendarHeaderBottom: false,
+      hideScrollbars: false,
+      journalSidebarWidth: 224,
 
       setActiveId: (id) => set({ activeId: id }),
 
@@ -96,6 +111,11 @@ export const useThemeStore = create<ThemeStore>()(
         })),
 
       setHourHeight: (vh) => set({ hourHeight: Math.max(5, Math.min(30, vh)) }),
+      setSidebarCompact: (v) => set({ sidebarCompact: v }),
+      setSidebarSide: (side) => set({ sidebarSide: side }),
+      setCalendarHeaderBottom: (v) => set({ calendarHeaderBottom: v }),
+      setHideScrollbars: (v) => set({ hideScrollbars: v }),
+      setJournalSidebarWidth: (w) => set({ journalSidebarWidth: Math.max(160, Math.min(480, w)) }),
     }),
     { name: 'vcalendar-theme' },
   ),

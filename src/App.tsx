@@ -49,6 +49,8 @@ function App() {
 
   const activeId = useThemeStore((s) => s.activeId);
   const custom = useThemeStore((s) => s.custom);
+  const sidebarSide = useThemeStore((s) => s.sidebarSide);
+  const hideScrollbars = useThemeStore((s) => s.hideScrollbars);
 
   useReminderScheduler();
 
@@ -65,6 +67,10 @@ function App() {
     root.style.setProperty('--th-subtle', theme.subtle);
     root.style.setProperty('--th-hover', theme.hover);
   }, [activeId, custom]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('hide-scrollbars', hideScrollbars);
+  }, [hideScrollbars]);
 
   useEffect(() => {
     if (!config) return;
@@ -84,7 +90,7 @@ function App() {
         />
       )}
 
-      <CalendarSidebar />
+      {sidebarSide !== 'right' && <CalendarSidebar />}
 
       <div className="flex-1 min-w-0">
         <Routes>
@@ -93,6 +99,8 @@ function App() {
           <Route path="/journals" element={<JournalPage />} />
         </Routes>
       </div>
+
+      {sidebarSide === 'right' && <CalendarSidebar />}
 
       {/* Mobile bottom tab bar */}
       <nav className="fixed bottom-0 left-0 right-0 h-14 bg-th-surface border-t border-th-border flex md:hidden z-20">

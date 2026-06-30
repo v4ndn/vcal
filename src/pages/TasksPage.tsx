@@ -3,6 +3,7 @@ import { Search, Check, ChevronDown, Pencil, Trash2, Plus } from 'lucide-react';
 import { AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
 import { useCalendarStore } from '../entities/calendar/model/store';
+import { useThemeStore } from '../entities/theme/model/store';
 import { getTasks } from '../shared/lib/getTasks';
 import type { CalendarTask } from '../entities/task/model/types';
 import EventTaskModal from '../widgets/EventTaskModal/EventTaskModal';
@@ -249,6 +250,7 @@ export default function TasksPage() {
   const deleteTask = useCalendarStore((s) => s.deleteTask);
   const deleteTasks = useCalendarStore((s) => s.deleteTasks);
   const selectedDate = useTasksStore((s) => s.selectedDate);
+  const sidebarSide = useThemeStore((s) => s.sidebarSide);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -313,7 +315,7 @@ export default function TasksPage() {
     : null;
 
   return (
-    <div className="flex h-full">
+    <div className={`flex h-full ${sidebarSide === 'left' ? 'flex-row-reverse' : ''}`}>
       {/* Center: grouped task list */}
       <div className="flex-1 flex flex-col min-w-0">
 

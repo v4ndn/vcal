@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { ChevronLeft, ChevronRight, Check } from 'lucide-react';
 import { useCalendarStore } from '../../entities/calendar/model/store';
 import { useTasksStore } from '../../entities/tasks/model/store';
+import { useThemeStore } from '../../entities/theme/model/store';
 import { getTasks } from '../../shared/lib/getTasks';
 
 function isSameDay(a: Date, b: Date) {
@@ -130,6 +131,7 @@ export default function TasksDayPanel({ onNewTask: _onNewTask }: Props) {
   const toggleTaskComplete = useCalendarStore((s) => s.toggleTaskComplete);
   const selectedDate = useTasksStore((s) => s.selectedDate);
   const setSelectedDate = useTasksStore((s) => s.setSelectedDate);
+  const sidebarSide = useThemeStore((s) => s.sidebarSide);
 
   const cw = getISOWeek(selectedDate);
 
@@ -174,7 +176,7 @@ export default function TasksDayPanel({ onNewTask: _onNewTask }: Props) {
   const monthYear = selectedDate.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
 
   return (
-    <div className="w-[296px] shrink-0 hidden md:flex flex-col border-l border-th-border bg-th-surface">
+    <div className={`w-[296px] shrink-0 hidden md:flex flex-col ${sidebarSide === 'left' ? 'border-r' : 'border-l'} border-th-border bg-th-surface`}>
 
       {/* Date header */}
       <div className="px-5 pt-5 pb-4 border-b border-th-border">

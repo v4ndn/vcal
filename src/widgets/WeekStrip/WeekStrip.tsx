@@ -38,6 +38,7 @@ export default function WeekStrip() {
   const isMobile = useIsMobile();
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
   const HOUR_HEIGHT = useThemeStore((s) => s.hourHeight);
+  const calendarHeaderBottom = useThemeStore((s) => s.calendarHeaderBottom);
   const SNAP_VH = HOUR_HEIGHT / 4;
 
   const timeToVh = (date: Date) => (date.getHours() + date.getMinutes() / 60) * HOUR_HEIGHT;
@@ -231,7 +232,7 @@ export default function WeekStrip() {
   }, [events, selectedUids, clipboard, createEvent]);
 
   return (
-    <div className="flex flex-col h-full bg-th-bg select-none">
+    <div className={`flex ${calendarHeaderBottom ? 'flex-col-reverse' : 'flex-col'} h-full bg-th-bg select-none`}>
 
       <TopBar
         days={days}

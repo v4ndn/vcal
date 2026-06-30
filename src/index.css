@@ -42,6 +42,10 @@
   background-color: color-mix(in srgb, var(--th-text) 5%, transparent);
 }
 
+/* ── hide scrollbars ─────────────────────────────────────────────────────── */
+.hide-scrollbars * { scrollbar-width: none; }
+.hide-scrollbars *::-webkit-scrollbar { display: none; }
+
 /* ── date-time picker ────────────────────────────────────────────────────── */
 .dtp-scroll::-webkit-scrollbar { width: 6px; }
 .dtp-scroll::-webkit-scrollbar-thumb { background: var(--th-border); border-radius: 3px; }
