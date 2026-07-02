@@ -290,27 +290,29 @@ export default function EventTaskModal(props: Props) {
             }
           </div>
 
-          <Field label="Repeat">
-            <Controller
-              control={control}
-              name="rrulePreset"
-              render={({ field }) => (
-                <Dropdown
-                  value={field.value}
-                  onChange={field.onChange}
-                  options={RRULE_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
+          {isEvent && (
+            <Field label="Repeat">
+              <Controller
+                control={control}
+                name="rrulePreset"
+                render={({ field }) => (
+                  <Dropdown
+                    value={field.value}
+                    onChange={field.onChange}
+                    options={RRULE_PRESETS.map((p) => ({ value: p.value, label: p.label }))}
+                  />
+                )}
+              />
+              {rrulePreset === '__custom__' && (
+                <Input
+                  type="text"
+                  {...register('rruleCustom')}
+                  placeholder="FREQ=WEEKLY;BYDAY=MO,WE"
+                  className="mt-2 font-mono text-xs"
                 />
               )}
-            />
-            {rrulePreset === '__custom__' && (
-              <Input
-                type="text"
-                {...register('rruleCustom')}
-                placeholder="FREQ=WEEKLY;BYDAY=MO,WE"
-                className="mt-2 font-mono text-xs"
-              />
-            )}
-          </Field>
+            </Field>
+          )}
 
           <Field label="Reminders">
             <RemindersField

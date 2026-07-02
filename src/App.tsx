@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route, NavLink } from 'react-router-dom';
+import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { motion, AnimatePresence } from 'motion/react';
 import { CalendarDays, ListTodo, BookOpen } from 'lucide-react';
 import { useCalendarStore, resetCalendarClient } from './entities/calendar/model/store';
 import { useAuthStore } from './entities/auth/model/store';
@@ -12,6 +13,12 @@ import WeekStrip from './widgets/WeekStrip/WeekStrip';
 import LoginScreen from './widgets/LoginScreen/LoginScreen';
 import TasksPage from './pages/TasksPage';
 import JournalPage from './pages/JournalPage';
+
+const pageVariants = {
+  enter:  { opacity: 0, scale: 1.01 },
+  center: { opacity: 1, scale: 1 },
+  exit:   { opacity: 0, scale: 0.99 },
+};
 
 function PresetDragOverlay() {
   const activeDragPreset = usePresetsStore((s) => s.activeDragPreset);
@@ -42,6 +49,8 @@ function PresetDragOverlay() {
 }
 
 function App() {
+  const location = useLocation();
+
   const config = useAuthStore((s) => s.config);
   const fetch = useCalendarStore((s) => s.fetch);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -69,6 +78,12 @@ function App() {
   }, [activeId, custom]);
 
   useEffect(() => {
+    const suppress = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener('contextmenu', suppress);
+    return () => document.removeEventListener('contextmenu', suppress);
+  }, []);
+
+  useEffect(() => {
     document.documentElement.classList.toggle('hide-scrollbars', hideScrollbars);
   }, [hideScrollbars]);
 
@@ -92,12 +107,24 @@ function App() {
 
       {sidebarSide !== 'right' && <CalendarSidebar />}
 
-      <div className="flex-1 min-w-0">
-        <Routes>
-          <Route path="/" element={<WeekStrip />} />
-          <Route path="/tasks" element={<TasksPage />} />
-          <Route path="/journals" element={<JournalPage />} />
-        </Routes>
+      <div className="flex-1 min-w-0 relative overflow-hidden">
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={location.pathname}
+            className="absolute inset-0"
+            variants={pageVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={{ duration: 0.09, ease: 'easeOut' }}
+          >
+            <Routes location={location}>
+              <Route path="/" element={<WeekStrip />} />
+              <Route path="/tasks" element={<TasksPage />} />
+              <Route path="/journals" element={<JournalPage />} />
+            </Routes>
+          </motion.div>
+        </AnimatePresence>
       </div>
 
       {sidebarSide === 'right' && <CalendarSidebar />}

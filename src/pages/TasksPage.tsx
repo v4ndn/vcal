@@ -208,7 +208,6 @@ function TaskRow({
             }`}
           >
             {task.summary}
-            {task.repeating && <span className="ml-1.5 text-[10px] text-th-muted">↻</span>}
           </span>
           {dueStr && (
             <span

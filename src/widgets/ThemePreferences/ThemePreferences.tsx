@@ -1,7 +1,8 @@
-import { useState, useRef } from 'react';
-import { X, Palette, PanelLeft } from 'lucide-react';
+import { useState, useRef, useEffect } from 'react';
+import { X, Palette, PanelLeft, BookOpen, FolderUp, Loader2 } from 'lucide-react';
 import { Dropdown } from '../../shared/ui/Dropdown';
 import { useThemeStore, PRESET_THEMES, type ThemeValues } from '../../entities/theme/model/store';
+import { useCalendarStore } from '../../entities/calendar/model/store';
 import Modal from '../../shared/ui/Modal';
 import { Input } from '../../shared/ui/Input';
 
@@ -20,6 +21,7 @@ const COLOR_FIELDS: { key: keyof ThemeValues; label: string }[] = [
 const SECTIONS = [
   { id: 'theme' as const, label: 'Theme', icon: Palette },
   { id: 'layout' as const, label: 'Layout', icon: PanelLeft },
+  { id: 'journal' as const, label: 'Journal', icon: BookOpen },
 ];
 
 
@@ -199,6 +201,138 @@ function LayoutSection() {
   );
 }
 
+const isTauri = '__TAURI_INTERNALS__' in window;
+
+function JournalSection() {
+  const calendars = useCalendarStore((s) => s.calendars);
+  const createJournal = useCalendarStore((s) => s.createJournal);
+
+  const journalCalendars = calendars.filter((c) => c.isJournal);
+
+  const [selectedCalendar, setSelectedCalendar] = useState(journalCalendars[0]?.name ?? '');
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const el = fileInputRef.current;
+    if (!el) return;
+    el.setAttribute('webkitdirectory', '');
+    el.setAttribute('directory', '');
+  }, []);
+
+  const calendarOptions = journalCalendars.map((c) => ({ value: c.name, label: c.name }));
+
+  async function uploadFiles(files: Array<{ relative_path: string; content: string }>) {
+    const calName = selectedCalendar || journalCalendars[0]?.name;
+    if (!calName) return;
+
+    if (files.length === 0) {
+      setLastResult('No .md files found in selected folder.');
+      return;
+    }
+
+    setUploading(true);
+    setProgress({ done: 0, total: files.length });
+    setLastResult(null);
+
+    let done = 0;
+    for (const file of files) {
+      const parts = file.relative_path.split('/');
+      parts[parts.length - 1] = parts[parts.length - 1].replace(/\.md$/i, '');
+      const summary = parts.join('/');
+      await createJournal(calName, { summary, description: file.content });
+      done++;
+      setProgress({ done, total: files.length });
+    }
+
+    setUploading(false);
+    setLastResult(`Uploaded ${done} note${done !== 1 ? 's' : ''} to "${calName}".`);
+    setProgress(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  }
+
+  async function handleTauriPick() {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const files = await invoke<Array<{ relative_path: string; content: string }>>('pick_md_folder');
+    await uploadFiles(files);
+  }
+
+  async function handleBrowserFiles(fileList: FileList) {
+    const files = Array.from(fileList)
+      .filter((f) => f.name.toLowerCase().endsWith('.md'))
+      .map(async (f) => ({
+        relative_path: f.webkitRelativePath || f.name,
+        content: await f.text(),
+      }));
+    await uploadFiles(await Promise.all(files));
+  }
+
+  function handleClick() {
+    if (isTauri) {
+      handleTauriPick();
+    } else {
+      fileInputRef.current?.click();
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-5">
+      {journalCalendars.length === 0 ? (
+        <p className="text-xs text-th-muted">No journal calendars found. Create one first.</p>
+      ) : (
+        <>
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-th-muted">Target journal</p>
+            <Dropdown
+              value={selectedCalendar || journalCalendars[0]?.name}
+              onChange={setSelectedCalendar}
+              options={calendarOptions}
+            />
+          </div>
+
+          <div className="border-t border-th-border pt-4 flex flex-col gap-3">
+            <div>
+              <p className="text-xs font-medium text-th-text">Import folder</p>
+              <p className="text-[11px] text-th-muted mt-0.5">
+                Select a folder — all .md files are uploaded preserving the folder hierarchy.
+              </p>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => e.target.files && handleBrowserFiles(e.target.files)}
+            />
+
+            <button
+              onClick={handleClick}
+              disabled={uploading}
+              className="flex items-center gap-2 self-start px-3 py-2 rounded-lg border border-th-border text-xs font-medium text-th-text hover:bg-th-hover transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {uploading ? (
+                <Loader2 size={13} className="animate-spin" />
+              ) : (
+                <FolderUp size={13} />
+              )}
+              {uploading && progress
+                ? `Uploading… ${progress.done}/${progress.total}`
+                : 'Choose folder'}
+            </button>
+
+            {lastResult && (
+              <p className="text-[11px] text-th-muted">{lastResult}</p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 interface Props {
   onClose: () => void;
 }
@@ -255,6 +389,7 @@ export default function Preferences({ onClose }: Props) {
               <p className="text-xs font-bold uppercase tracking-widest text-th-muted mb-6">{label}</p>
               {id === 'theme' && <ThemeSection />}
               {id === 'layout' && <LayoutSection />}
+              {id === 'journal' && <JournalSection />}
             </div>
           ))}
         </div>

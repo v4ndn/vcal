@@ -117,6 +117,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     }),
 
   fetch: async () => {
+    set({ loading: true });
     const client = await getClient();
     const rawCalendars = await client.fetchCalendars();
 

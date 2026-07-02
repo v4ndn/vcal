@@ -1,10 +1,12 @@
 import type { MutableRefObject } from 'react';
 import type { CalendarEvent } from '../../entities/event/model/types';
+import type { CalendarTask } from '../../entities/task/model/types';
 import type { TaskPreset } from '../../entities/presets/model/store';
 import { isSameDay } from '../../shared/lib/week';
 import { layoutDayEvents } from '../../shared/lib/layoutEvents';
 import type { DragActive, DragSnapshot, CreateSnap } from './types';
 import EventBlock from './EventBlock';
+import TaskBlock from './TaskBlock';
 
 const HOURS = Array.from({ length: 24 }, (_, i) => i);
 
@@ -15,6 +17,7 @@ interface DayColumnProps {
   now: Date;
   days: Date[];
   dayEvents: CalendarEvent[];
+  dayTasks: CalendarTask[];
   selectedUids: Set<string>;
   HOUR_HEIGHT: number;
   SNAP_VH: number;
@@ -31,13 +34,18 @@ interface DayColumnProps {
   startMoveTouch: (e: React.PointerEvent, event: CalendarEvent, colIdx: number) => void;
   startResize: (e: React.PointerEvent, event: CalendarEvent, colIdx: number) => void;
   setContextMenu: (m: { x: number; y: number; event: CalendarEvent } | null) => void;
+  selectedTaskUids: Set<string>;
+  onToggleTask: (e: React.MouseEvent, uid: string) => void;
+  onTaskContextMenu: (e: React.MouseEvent, task: CalendarTask) => void;
+  startMoveTask: (e: React.PointerEvent, task: CalendarTask, colIdx: number) => void;
 }
 
 export default function DayColumn({
-  day, colIdx, isToday, now, days, dayEvents, selectedUids,
+  day, colIdx, isToday, now, days, dayEvents, dayTasks, selectedUids,
   HOUR_HEIGHT, SNAP_VH, timeToVh, durationToVh, vhToDate,
   dragSnap, activeDragRef, createSnap, presetDropPreview, activeDragPreset,
   onPointerDown, startMove, startMoveTouch, startResize, setContextMenu,
+  selectedTaskUids, onToggleTask, onTaskContextMenu, startMoveTask,
 }: DayColumnProps) {
   const currentDrag = activeDragRef.current;
   const layout = layoutDayEvents(dayEvents);
@@ -168,6 +176,28 @@ export default function DayColumn({
           );
         });
       })()}
+
+      {/* Tasks */}
+      {dayTasks.map((task) => {
+        const top = task.start ? timeToVh(task.start) : 0;
+        const isTaskDragging = dragSnap?.eventUid === task.uid;
+        return (
+          <TaskBlock
+            key={task.uid}
+            task={task}
+            top={top}
+            height={HOUR_HEIGHT / 2}
+            isSelected={selectedTaskUids.has(task.uid)}
+            isDragging={isTaskDragging}
+            onToggle={(e) => onToggleTask(e, task.uid)}
+            onContextMenu={(e) => { e.preventDefault(); onTaskContextMenu(e, task); }}
+            onPointerDown={(e) => {
+              if (e.pointerType === 'touch') { startMoveTask(e, task, colIdx); return; }
+              startMoveTask(e, task, colIdx);
+            }}
+          />
+        );
+      })}
 
       {/* Events */}
       {dayEvents.map((event, j) => {

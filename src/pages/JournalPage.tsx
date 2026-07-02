@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Plus, Search, FileText, Folder, FolderOpen, BookOpen, Trash2, Pencil } from 'lucide-react';
+import { Plus, Search, FileText, Folder, FolderOpen, BookOpen, Trash2, Pencil, X } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import { useCalendarStore } from '../entities/calendar/model/store';
 import { useUIStore } from '../entities/ui/model/store';
@@ -51,6 +51,11 @@ interface DndProps {
   onDragLeave: () => void;
 }
 
+interface ExpandProps {
+  expandedKeys: Set<string>;
+  toggleExpanded: (key: string) => void;
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 function nodeMatchesSearch(node: JournalNode, q: string): boolean {
@@ -97,11 +102,12 @@ interface TreeNodeProps {
   onContextMenu: (e: React.MouseEvent, target: CtxTarget) => void;
   forceOpen?: boolean;
   dnd: DndProps;
+  expand: ExpandProps;
 }
 
-function TreeNode({ node, depth, collectionName, selectedUid, onSelect, onCreate, onContextMenu, forceOpen, dnd }: TreeNodeProps) {
-  const [open, setOpen] = useState(true);
-  const isOpen = forceOpen ? true : open;
+function TreeNode({ node, depth, collectionName, selectedUid, onSelect, onCreate, onContextMenu, forceOpen, dnd, expand }: TreeNodeProps) {
+  const folderKey = node.kind === 'folder' ? `${collectionName}:::${node.path}` : '';
+  const isOpen = forceOpen ? true : (node.kind === 'folder' && expand.expandedKeys.has(folderKey));
   const indent = depth * 12;
 
   if (node.kind === 'note') {
@@ -135,7 +141,6 @@ function TreeNode({ node, depth, collectionName, selectedUid, onSelect, onCreate
   }
 
   // Folder
-  const folderKey = `${collectionName}:::${node.path}`;
   const isFolderSelected = dnd.selectedFolderKeys.has(folderKey);
   const isDropTarget = dnd.dropTarget?.collectionName === collectionName && dnd.dropTarget?.folderPath === node.path;
 
@@ -149,7 +154,7 @@ function TreeNode({ node, depth, collectionName, selectedUid, onSelect, onCreate
         draggable
         onClick={(e) => {
           if (e.shiftKey) { e.preventDefault(); dnd.onShiftClick({ kind: 'folder', path: node.path, collectionName }); }
-          else setOpen((v) => !v);
+          else expand.toggleExpanded(folderKey);
         }}
         onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, { kind: 'folder', node }); }}
         onDragStart={(e) => { e.stopPropagation(); dnd.onDragStart(e, { kind: 'folder', node, collectionName }); }}
@@ -194,6 +199,7 @@ function TreeNode({ node, depth, collectionName, selectedUid, onSelect, onCreate
                 onContextMenu={onContextMenu}
                 forceOpen={forceOpen}
                 dnd={dnd}
+                expand={expand}
               />
             ))}
           </motion.div>
@@ -213,10 +219,12 @@ interface CollectionSectionProps {
   onContextMenu: (e: React.MouseEvent, target: CtxTarget) => void;
   searchQuery: string;
   dnd: DndProps;
+  expand: ExpandProps;
 }
 
-function CollectionSection({ root, selectedUid, onSelect, onCreate, onContextMenu, searchQuery, dnd }: CollectionSectionProps) {
-  const [open, setOpen] = useState(true);
+function CollectionSection({ root, selectedUid, onSelect, onCreate, onContextMenu, searchQuery, dnd, expand }: CollectionSectionProps) {
+  const collectionKey = `__collection__${root.collectionName}`;
+  const open = expand.expandedKeys.has(collectionKey);
   const filteredChildren = useMemo(() => filterNodes(root.children, searchQuery), [root.children, searchQuery]);
   const forceOpen = searchQuery !== '';
   const isDropTarget = dnd.dropTarget?.collectionName === root.collectionName && dnd.dropTarget?.folderPath === null;
@@ -229,7 +237,7 @@ function CollectionSection({ root, selectedUid, onSelect, onCreate, onContextMen
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) { e.stopPropagation(); dnd.onDragLeave(); } }}
     >
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => expand.toggleExpanded(collectionKey)}
         className={`group w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left transition-all hover:bg-th-hover
           ${isDropTarget ? 'ring-1 ring-inset ring-th-accent bg-th-accent/15' : ''}`}
       >
@@ -268,6 +276,7 @@ function CollectionSection({ root, selectedUid, onSelect, onCreate, onContextMen
                 onContextMenu={onContextMenu}
                 forceOpen={forceOpen}
                 dnd={dnd}
+                expand={expand}
               />
             ))}
           </motion.div>
@@ -281,13 +290,11 @@ function CollectionSection({ root, selectedUid, onSelect, onCreate, onContextMen
 
 interface NoteEditorProps {
   journal: CalendarJournal;
-  onDelete: () => void;
 }
 
-function NoteEditor({ journal, onDelete }: NoteEditorProps) {
+function NoteEditor({ journal }: NoteEditorProps) {
   const updateJournal = useCalendarStore((s) => s.updateJournal);
 
-  const [title, setTitle] = useState(journal.summary);
   const [body, setBody] = useState(journal.description);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -295,15 +302,9 @@ function NoteEditor({ journal, onDelete }: NoteEditorProps) {
   bodyRef.current = body;
 
   useEffect(() => {
-    setTitle(journal.summary);
     setBody(journal.description);
     setDirty(false);
   }, [journal.uid]);
-
-  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTitle(e.target.value);
-    setDirty(true);
-  };
 
   const handleBodyChange = useCallback((v: string) => {
     setBody(v);
@@ -311,10 +312,9 @@ function NoteEditor({ journal, onDelete }: NoteEditorProps) {
   }, []);
 
   const handleSave = async () => {
-    if (!title.trim()) return;
     setSaving(true);
     try {
-      await updateJournal(journal.uid, { summary: title.trim(), description: bodyRef.current });
+      await updateJournal(journal.uid, { summary: journal.summary, description: bodyRef.current });
       setDirty(false);
     } finally {
       setSaving(false);
@@ -336,34 +336,18 @@ function NoteEditor({ journal, onDelete }: NoteEditorProps) {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-th-border shrink-0">
-        <input
-          value={title}
-          onChange={handleTitleChange}
-          onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); }}
-          className="flex-1 text-base font-semibold text-th-text bg-transparent outline-none placeholder-th-muted/40 min-w-0"
-          placeholder="Note title (use / for folders)"
-        />
-        <div className="flex items-center gap-1.5 shrink-0">
-          {dirty && (
-            <button
-              onClick={handleSave}
-              disabled={saving || !title.trim()}
-              className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-th-accent text-th-accent-fg hover:opacity-90 disabled:opacity-40 transition-opacity"
-            >
-              {saving ? 'Saving…' : 'Save'}
-            </button>
-          )}
+    <div className="flex flex-col h-full relative">
+      {dirty && (
+        <div className="absolute top-3 right-4 z-10">
           <button
-            onClick={onDelete}
-            className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-red-500 hover:bg-th-hover transition-colors"
-            title="Delete note"
+            onClick={handleSave}
+            disabled={saving}
+            className="px-3 py-1.5 text-xs font-semibold rounded-lg bg-th-accent text-th-accent-fg hover:opacity-90 disabled:opacity-40 transition-opacity shadow-sm"
           >
-            <Trash2 size={14} />
+            {saving ? 'Saving…' : 'Save'}
           </button>
         </div>
-      </div>
+      )}
       <div
         ref={bodyWrapRef}
         className="flex-1 overflow-y-auto px-6 py-4 cursor-text"
@@ -434,8 +418,81 @@ export default function JournalPage() {
   );
   const tree = useMemo(() => buildJournalTree(filteredJournals), [filteredJournals]);
 
+  // Expanded folders (persisted)
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem('vcalendar-journal-expanded');
+      return stored ? new Set(JSON.parse(stored) as string[]) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  const toggleExpanded = useCallback((key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      localStorage.setItem('vcalendar-journal-expanded', JSON.stringify([...next]));
+      return next;
+    });
+  }, []);
+
+  const expand: ExpandProps = { expandedKeys, toggleExpanded };
+
   // View state
-  const [selectedUid, setSelectedUid] = useState<string | null>(null);
+  const [selectedUid, setSelectedUid] = useState<string | null>(() => {
+    try { return localStorage.getItem('vcalendar-journal-selected-note') ?? null; } catch { return null; }
+  });
+
+  const [openTabUids, setOpenTabUids] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem('vcalendar-journal-tabs');
+      const tabs: string[] = stored ? JSON.parse(stored) : [];
+      const selected = localStorage.getItem('vcalendar-journal-selected-note');
+      if (selected && !tabs.includes(selected)) return [...tabs, selected];
+      return tabs;
+    } catch {
+      return [];
+    }
+  });
+
+  const persistTabs = (tabs: string[]) => {
+    try { localStorage.setItem('vcalendar-journal-tabs', JSON.stringify(tabs)); } catch {}
+  };
+
+  const openTabs = useMemo(
+    () => openTabUids
+      .map((uid) => journals.find((j) => j.uid === uid))
+      .filter(Boolean)
+      .map((j) => ({ uid: j!.uid, name: j!.summary.split('/').pop() ?? j!.summary })),
+    [openTabUids, journals],
+  );
+
+  const [dragTabUid, setDragTabUid] = useState<string | null>(null);
+
+  const handleTabDragStart = (e: React.DragEvent, uid: string) => {
+    setDragTabUid(uid);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', uid);
+  };
+
+  const handleTabDragOver = (e: React.DragEvent, uid: string) => {
+    e.preventDefault();
+    if (!dragTabUid || dragTabUid === uid) return;
+    setOpenTabUids((prev) => {
+      const from = prev.indexOf(dragTabUid);
+      const to = prev.indexOf(uid);
+      if (from === -1 || to === -1 || from === to) return prev;
+      const next = [...prev];
+      next.splice(from, 1);
+      next.splice(to, 0, dragTabUid);
+      persistTabs(next);
+      return next;
+    });
+  };
+
+  const handleTabDragEnd = () => setDragTabUid(null);
+
   const [search, setSearch] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [modalPrefill, setModalPrefill] = useState<{ title: string; calendarName: string }>({ title: '', calendarName: '' });
@@ -457,12 +514,33 @@ export default function JournalPage() {
     [journals, selectedUid],
   );
 
+  useEffect(() => {
+    if (selectedUid) localStorage.setItem('vcalendar-journal-selected-note', selectedUid);
+    else localStorage.removeItem('vcalendar-journal-selected-note');
+  }, [selectedUid]);
+
   // ── handlers ───────────────────────────────────────────────────────────────
 
   const handleSelect = (j: CalendarJournal) => {
     setSelectedNoteUids(new Set());
     setSelectedFolderKeys(new Set());
+    setOpenTabUids((prev) => {
+      if (prev.includes(j.uid)) return prev;
+      const next = [...prev, j.uid];
+      persistTabs(next);
+      return next;
+    });
     setSelectedUid(j.uid);
+  };
+
+  const handleCloseTab = (uid: string) => {
+    const next = openTabUids.filter((u) => u !== uid);
+    persistTabs(next);
+    setOpenTabUids(next);
+    if (selectedUid === uid) {
+      const idx = openTabUids.indexOf(uid);
+      setSelectedUid(next.length > 0 ? next[Math.max(0, idx - 1)] : null);
+    }
   };
 
   const handleCreate = (prefixPath: string, collectionName?: string) => {
@@ -486,7 +564,7 @@ export default function JournalPage() {
       `"${journal.summary}" will be permanently deleted.`,
       async () => {
         await deleteJournal(journal.uid);
-        if (selectedUid === journal.uid) setSelectedUid(null);
+        handleCloseTab(journal.uid);
       },
     );
   };
@@ -652,8 +730,8 @@ export default function JournalPage() {
   return (
     <div className={`flex h-full overflow-hidden bg-th-bg ${sidebarSide === 'right' ? 'flex-row-reverse' : ''}`}>
       {/* Left: tree panel */}
-      <div style={{ width: panelWidth }} className={`shrink-0 flex flex-col ${sidebarSide === 'right' ? 'border-l' : 'border-r'} border-th-border bg-th-surface relative`}>
-        <div className="flex items-center gap-1.5 px-2 py-2 border-b border-th-border">
+      <div style={{ width: panelWidth }} className={`shrink-0 h-full overflow-x-hidden overflow-y-auto ${sidebarSide === 'right' ? 'border-l' : 'border-r'} border-th-border bg-th-surface relative`}>
+        <div className="sticky top-0 z-10 w-full flex items-center gap-1.5 px-2 py-2 border-b border-th-border bg-th-surface">
           <div className="flex-1 flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-th-subtle border border-th-border text-xs">
             <Search size={11} className="text-th-muted shrink-0" />
             <input
@@ -665,9 +743,9 @@ export default function JournalPage() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto py-1 px-1 relative">
+        <div className="py-1 px-1">
           {tree.length === 0 && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-th-muted/50">
+            <div className="flex flex-col items-center justify-center gap-3 text-th-muted/50 py-16">
               <BookOpen size={28} strokeWidth={1.5} />
               <p className="text-xs text-center px-4 leading-relaxed">No journal entries yet.</p>
               <button
@@ -689,6 +767,7 @@ export default function JournalPage() {
               onContextMenu={handleContextMenu}
               searchQuery={searchQuery}
               dnd={dnd}
+              expand={expand}
             />
           ))}
         </div>
@@ -703,12 +782,54 @@ export default function JournalPage() {
       </div>
 
       {/* Right: note content */}
-      <div className="flex-1 min-w-0 overflow-hidden">
+      <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        {/* Tab bar */}
+        {openTabs.length > 0 && (
+          <div className="flex items-stretch border-b border-th-border bg-th-surface shrink-0 overflow-x-auto">
+            {openTabs.map((tab) => {
+              const isActive = selectedUid === tab.uid;
+              const isDragging = dragTabUid === tab.uid;
+              return (
+                <button
+                  key={tab.uid}
+                  draggable
+                  onDragStart={(e) => handleTabDragStart(e, tab.uid)}
+                  onDragOver={(e) => handleTabDragOver(e, tab.uid)}
+                  onDrop={(e) => e.preventDefault()}
+                  onDragEnd={handleTabDragEnd}
+                  onClick={() => setSelectedUid(tab.uid)}
+                  className={`group relative flex items-center gap-1.5 px-3 py-2 border-r border-th-border text-xs font-medium shrink-0 transition-colors max-w-[200px] min-w-0 select-none ${
+                    isActive
+                      ? 'bg-th-bg text-th-text'
+                      : isDragging
+                      ? 'opacity-40 bg-th-subtle text-th-muted'
+                      : 'text-th-muted hover:text-th-text hover:bg-th-hover'
+                  }`}
+                >
+                  <FileText size={11} className="shrink-0 opacity-60" />
+                  <span className="truncate flex-1 min-w-0">{tab.name}</span>
+                  <span
+                    role="button"
+                    onClick={(e) => { e.stopPropagation(); handleCloseTab(tab.uid); }}
+                    className={`shrink-0 w-4 h-4 flex items-center justify-center rounded transition-colors hover:bg-th-border ${
+                      isActive ? 'opacity-40 hover:opacity-100' : 'opacity-0 group-hover:opacity-40 hover:!opacity-100'
+                    }`}
+                  >
+                    <X size={9} />
+                  </span>
+                  {isActive && (
+                    <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-th-accent" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {selectedJournal ? (
           <NoteEditor
             key={selectedJournal.uid}
             journal={selectedJournal}
-            onDelete={() => handleDeleteNote(selectedJournal)}
           />
         ) : (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-th-muted/40">

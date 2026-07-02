@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { MutableRefObject, RefObject } from 'react';
 import type { CalendarEvent } from '../../entities/event/model/types';
+import type { CalendarTask } from '../../entities/task/model/types';
 import { isSameDay } from '../../shared/lib/week';
 import type { DragActive, DragSnapshot, CreateSnap, PendingDrop } from './types';
 
@@ -16,7 +17,9 @@ export interface DragCtx {
   mobileDayIndexRef: MutableRefObject<number>;
   days: Date[];
   events: CalendarEvent[];
+  timedTasks: CalendarTask[];
   selectedUids: Set<string>;
+  selectedTaskUids: Set<string>;
   HOUR_HEIGHT: number;
   SNAP_VH: number;
   timeToVh: (d: Date) => number;
@@ -26,11 +29,28 @@ export interface DragCtx {
   setDragSnap: (s: DragSnapshot | null) => void;
   setCreateSnap: (s: CreateSnap | null) => void;
   setSelectedUids: (a: Set<string> | ((p: Set<string>) => Set<string>)) => void;
+  setSelectedTaskUids: (a: Set<string> | ((p: Set<string>) => Set<string>)) => void;
   setViewingEvent: (e: CalendarEvent | null) => void;
   setPendingDrop: (d: PendingDrop | null) => void;
   setContextMenu: (m: { x: number; y: number; event: CalendarEvent } | null) => void;
   setPendingCreate: (c: { start: Date; end: Date } | null) => void;
   updateEventTime: (event: CalendarEvent, newStart: Date, newEnd: Date | undefined, scope: 'single' | 'all') => Promise<void>;
+  updateTaskTime: (uid: string, newStart: Date, newDue: Date | undefined) => Promise<void>;
+}
+
+export function taskToEvent(task: CalendarTask): CalendarEvent {
+  return {
+    uid: task.uid,
+    baseUid: task.uid,
+    summary: task.summary,
+    description: task.description,
+    start: task.start!,
+    end: task.due,
+    calendarName: task.calendarName,
+    calendarColor: task.calendarColor,
+    type: 'VTODO',
+    allDay: false,
+  };
 }
 
 function gridVhAtY(clientY: number, scrollRef: RefObject<HTMLDivElement>): number {
@@ -42,11 +62,48 @@ export function createDragHandlers(ctx: DragCtx) {
   const {
     scrollRef, activeDrag, dragSnapRef, createDragRef, shouldPreventScrollRef,
     touchTimerRef, touchContextTimerRef, isMobileRef, mobileDayIndexRef,
-    days, events, selectedUids, HOUR_HEIGHT, SNAP_VH,
+    days, events, timedTasks, selectedUids, selectedTaskUids, HOUR_HEIGHT, SNAP_VH,
     timeToVh, durationToVh, snapVh, vhToDate,
-    setDragSnap, setCreateSnap, setSelectedUids, setViewingEvent,
-    setPendingDrop, setContextMenu, setPendingCreate, updateEventTime,
+    setDragSnap, setCreateSnap, setSelectedUids, setSelectedTaskUids, setViewingEvent,
+    setPendingDrop, setContextMenu, setPendingCreate, updateEventTime, updateTaskTime,
   } = ctx;
+
+  function buildGroupEvents(anchorUid: string): { isGroupDrag: boolean; groupEvents: CalendarEvent[] } {
+    const inEventSel = selectedUids.has(anchorUid);
+    const inTaskSel = selectedTaskUids.has(anchorUid);
+    const totalSelected = selectedUids.size + selectedTaskUids.size;
+    const isGroupDrag = (inEventSel || inTaskSel) && totalSelected > 1;
+    const groupEvents = isGroupDrag
+      ? [
+          ...events.filter((ev) => selectedUids.has(ev.uid)),
+          ...timedTasks.filter((t) => selectedTaskUids.has(t.uid)).map(taskToEvent),
+        ]
+      : [];
+    return { isGroupDrag, groupEvents };
+  }
+
+  async function applyGroupDrop(
+    drag: DragActive,
+    snap: DragSnapshot,
+  ) {
+    const colDelta = snap.dayIndex - drag.anchorColIndex;
+    const vhDelta = snap.startVh - drag.anchorStartVh;
+    for (const ev of drag.groupEvents) {
+      const evStartVh = timeToVh(ev.start);
+      const evDurVh = ev.end ? durationToVh(ev.start, ev.end) : HOUR_HEIGHT;
+      const evNewStartVh = Math.max(0, Math.min(24 * HOUR_HEIGHT - SNAP_VH, evStartVh + vhDelta));
+      const evNewEndVh = Math.min(24 * HOUR_HEIGHT, evNewStartVh + evDurVh);
+      const evDayIdx = days.findIndex((d) => isSameDay(d, ev.start));
+      const evTargetCol = Math.max(0, Math.min(6, evDayIdx + colDelta));
+      const evNewStart = vhToDate(evNewStartVh, days[evTargetCol]);
+      const evNewEnd = ev.end ? vhToDate(evNewEndVh, days[evTargetCol]) : undefined;
+      if (ev.type === 'VTODO') {
+        await updateTaskTime(ev.uid, evNewStart, evNewEnd);
+      } else {
+        await updateEventTime(ev, evNewStart, evNewEnd, 'single');
+      }
+    }
+  }
 
   function startMove(e: React.PointerEvent, event: CalendarEvent, colIndex: number) {
     e.stopPropagation();
@@ -63,8 +120,7 @@ export function createDragHandlers(ctx: DragCtx) {
     const isShiftClick = e.shiftKey;
     let hasMoved = false;
 
-    const isGroupDrag = selectedUids.has(event.uid) && selectedUids.size > 1;
-    const groupEvents = isGroupDrag ? events.filter((ev) => selectedUids.has(ev.uid)) : [];
+    const { isGroupDrag, groupEvents } = buildGroupEvents(event.uid);
 
     function onMove(me: PointerEvent) {
       if (!hasMoved) {
@@ -112,11 +168,19 @@ export function createDragHandlers(ctx: DragCtx) {
 
       if (!hasMoved) {
         if (isShiftClick) {
-          setSelectedUids((prev) => {
-            const next = new Set(prev);
-            if (next.has(event.uid)) next.delete(event.uid); else next.add(event.uid);
-            return next;
-          });
+          if (event.type === 'VTODO') {
+            setSelectedTaskUids((prev) => {
+              const next = new Set(prev);
+              if (next.has(event.uid)) next.delete(event.uid); else next.add(event.uid);
+              return next;
+            });
+          } else {
+            setSelectedUids((prev) => {
+              const next = new Set(prev);
+              if (next.has(event.uid)) next.delete(event.uid); else next.add(event.uid);
+              return next;
+            });
+          }
         } else {
           setViewingEvent(event);
         }
@@ -135,18 +199,9 @@ export function createDragHandlers(ctx: DragCtx) {
       const newEnd = drag.event.end ? vhToDate(snap.endVh, targetDay) : undefined;
 
       if (drag.isGroupDrag) {
-        const colDelta = snap.dayIndex - drag.anchorColIndex;
-        const vhDelta = snap.startVh - drag.anchorStartVh;
-        for (const ev of drag.groupEvents) {
-          const evStartVh = timeToVh(ev.start);
-          const evDurVh = ev.end ? durationToVh(ev.start, ev.end) : HOUR_HEIGHT;
-          const evNewStartVh = Math.max(0, Math.min(24 * HOUR_HEIGHT - SNAP_VH, evStartVh + vhDelta));
-          const evNewEndVh = Math.min(24 * HOUR_HEIGHT, evNewStartVh + evDurVh);
-          const evDayIdx = days.findIndex((d) => isSameDay(d, ev.start));
-          const evTargetCol = Math.max(0, Math.min(6, evDayIdx + colDelta));
-          await updateEventTime(ev, vhToDate(evNewStartVh, days[evTargetCol]), ev.end ? vhToDate(evNewEndVh, days[evTargetCol]) : undefined, 'single');
-        }
-        setSelectedUids(new Set());
+        await applyGroupDrop(drag, snap);
+      } else if (drag.event.type === 'VTODO') {
+        await updateTaskTime(drag.event.uid, newStart, newEnd);
       } else if (drag.event.uid !== drag.event.baseUid) {
         setPendingDrop({ event: drag.event, newStart, newEnd });
       } else {
@@ -271,13 +326,24 @@ export function createDragHandlers(ctx: DragCtx) {
       phase = 'selected';
       shouldPreventScrollRef.current = true;
       navigator.vibrate?.(40);
-      const newSelected = new Set([...selectedUids, event.uid]);
-      setSelectedUids(newSelected);
-      const groupEventsArr = events.filter((ev) => newSelected.has(ev.uid));
-      const isGroup = groupEventsArr.length > 1;
+
+      const newEventSelected = event.type !== 'VTODO' ? new Set([...selectedUids, event.uid]) : selectedUids;
+      const newTaskSelected = event.type === 'VTODO' ? new Set([...selectedTaskUids, event.uid]) : selectedTaskUids;
+      if (event.type !== 'VTODO') setSelectedUids(newEventSelected);
+      else setSelectedTaskUids(newTaskSelected);
+
+      const totalSelected = newEventSelected.size + newTaskSelected.size;
+      const groupEventsList = totalSelected > 1
+        ? [
+            ...events.filter((ev) => newEventSelected.has(ev.uid)),
+            ...timedTasks.filter((t) => newTaskSelected.has(t.uid)).map(taskToEvent),
+          ]
+        : [];
+      const isGroup = totalSelected > 1;
+
       activeDrag.current = {
         type: 'move', event, grabOffsetVh, originalDuration,
-        isGroupDrag: isGroup, groupEvents: isGroup ? groupEventsArr : [],
+        isGroupDrag: isGroup, groupEvents: groupEventsList,
         anchorStartVh, anchorColIndex: colIndex,
       };
       const snap: DragSnapshot = {
@@ -327,7 +393,10 @@ export function createDragHandlers(ctx: DragCtx) {
       shouldPreventScrollRef.current = false;
       window.removeEventListener('touchmove', onTouchMove);
       cleanupPointer();
-      if (phase === 'waiting') { setViewingEvent(event); return; }
+      if (phase === 'waiting') {
+        setViewingEvent(event);
+        return;
+      }
       if (phase === 'selected') return;
       if (phase === 'dragging') {
         const snap = dragSnapRef.current;
@@ -340,15 +409,9 @@ export function createDragHandlers(ctx: DragCtx) {
         const newStart = vhToDate(snap.startVh, targetDay);
         const newEnd = drag.event.end ? vhToDate(snap.endVh, targetDay) : undefined;
         if (drag.isGroupDrag) {
-          const vhDelta = snap.startVh - drag.anchorStartVh;
-          for (const ev of drag.groupEvents) {
-            const evStartVh = timeToVh(ev.start);
-            const evDurVh = ev.end ? durationToVh(ev.start, ev.end) : HOUR_HEIGHT;
-            const evNewStartVh = Math.max(0, Math.min(24 * HOUR_HEIGHT - SNAP_VH, evStartVh + vhDelta));
-            const evNewEndVh = Math.min(24 * HOUR_HEIGHT, evNewStartVh + evDurVh);
-            await updateEventTime(ev, vhToDate(evNewStartVh, targetDay), ev.end ? vhToDate(evNewEndVh, targetDay) : undefined, 'single');
-          }
-          setSelectedUids(new Set());
+          await applyGroupDrop(drag, snap);
+        } else if (drag.event.type === 'VTODO') {
+          await updateTaskTime(drag.event.uid, newStart, newEnd);
         } else if (drag.event.uid !== drag.event.baseUid) {
           setPendingDrop({ event: drag.event, newStart, newEnd });
         } else {

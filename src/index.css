@@ -41,6 +41,9 @@
   outline: none;
   background-color: color-mix(in srgb, var(--th-text) 5%, transparent);
 }
+.milkdown-wrap .ProseMirror:focus-visible {
+  background-color: transparent;
+}
 
 /* ── hide scrollbars ─────────────────────────────────────────────────────── */
 .hide-scrollbars * { scrollbar-width: none; }
@@ -155,6 +158,41 @@
 }
 .milkdown-wrap .ProseMirror li { margin: 0.1em 0; }
 .milkdown-wrap .ProseMirror li > p { margin: 0; }
+
+.milkdown-wrap .ProseMirror li[data-item-type="task"] {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.45em;
+  margin-left: -1.4em;
+  cursor: pointer;
+}
+.milkdown-wrap .ProseMirror li[data-item-type="task"]::before {
+  content: '';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 0.85em;
+  height: 0.85em;
+  min-width: 0.85em;
+  border: 1.5px solid var(--th-border);
+  border-radius: 3px;
+  flex-shrink: 0;
+  background: transparent;
+  transition: background 0.1s, border-color 0.1s;
+}
+.milkdown-wrap .ProseMirror li[data-item-type="task"][data-checked="true"]::before {
+  background: var(--th-accent);
+  border-color: var(--th-accent);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 5l2.5 2.5L8 3' stroke='white' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E");
+  background-size: 90%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.milkdown-wrap .ProseMirror li[data-item-type="task"][data-checked="true"] > p {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
 
 .milkdown-wrap .ProseMirror hr {
   border: none;

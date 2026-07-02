@@ -16,6 +16,7 @@ import { useTasksStore } from '../../entities/tasks/model/store';
 import { useThemeStore } from '../../entities/theme/model/store';
 import { weekGridEl } from '../../shared/lib/weekGridRef';
 import { getWeekDays } from '../../shared/lib/week';
+import { getTasks } from '../../shared/lib/getTasks';
 import MiniCalendar from '../MiniCalendar/MiniCalendar';
 
 // ── collapsible section ────────────────────────────────────────────────────────
@@ -89,6 +90,7 @@ export default function CalendarSidebar() {
   const weekOffset = useCalendarStore((s) => s.weekOffset);
   const createNewEvent = useCalendarStore((s) => s.createNewEvent);
   const allEvents = useCalendarStore((s) => s.events);
+  const allItems = useCalendarStore((s) => s.items);
   const clearConfig = useAuthStore((s) => s.clearConfig);
 
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
@@ -98,6 +100,7 @@ export default function CalendarSidebar() {
 
   const presets = usePresetsStore((s) => s.presets);
   const selectedUids = usePresetsStore((s) => s.selectedUids);
+  const selectedTaskUids = usePresetsStore((s) => s.selectedTaskUids);
   const savePreset = usePresetsStore((s) => s.savePreset);
   const deletePreset = usePresetsStore((s) => s.deletePreset);
   const setActiveDragPreset = usePresetsStore((s) => s.setActiveDragPreset);
@@ -116,10 +119,14 @@ export default function CalendarSidebar() {
   });
   const presetName = watchPreset('presetName');
 
+  const totalSelected = selectedUids.size + selectedTaskUids.size;
+
   function handleSavePreset({ presetName: name }: { presetName: string }) {
-    const selected = allEvents.filter((ev) => selectedUids.has(ev.uid));
-    if (selected.length < 2) return;
-    savePreset(name, selected);
+    const selectedEvents = allEvents.filter((ev) => selectedUids.has(ev.uid));
+    const allTasksList = getTasks(allItems);
+    const selectedTasks = allTasksList.filter((t) => selectedTaskUids.has(t.uid) && t.start != null);
+    if (selectedEvents.length + selectedTasks.length < 2) return;
+    savePreset(name, selectedEvents, selectedTasks);
     resetPreset();
     setShowSaveForm(false);
   }
@@ -381,7 +388,7 @@ export default function CalendarSidebar() {
         {isCalendarRoute && (
           <Section icon={Bookmark} label="Presets">
             {/* Save as preset */}
-            {selectedUids.size >= 2 && !showSaveForm && (
+            {totalSelected >= 2 && !showSaveForm && (
               <button
                 onClick={() => setShowSaveForm(true)}
                 className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-th-hover transition-colors text-left"
@@ -428,7 +435,7 @@ export default function CalendarSidebar() {
 
             {presets.length === 0 && !showSaveForm && (
               <p className="px-2 text-xs text-th-muted/50">
-                {selectedUids.size >= 2 ? '' : 'No presets yet'}
+                {totalSelected >= 2 ? '' : 'No presets yet'}
               </p>
             )}
 

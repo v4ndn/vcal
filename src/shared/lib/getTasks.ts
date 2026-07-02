@@ -39,20 +39,29 @@ function parseICSDate(val: unknown): Date | undefined {
   return undefined;
 }
 
+function isAllDayTask(rawData: string): boolean {
+  return /^DTSTART(?:;[^:\r\n]*)?:\d{8}\s*$/m.test(rawData);
+}
+
 export function getTasks(items: StoredItem[]): CalendarTask[] {
   return items
     .filter((item) => item.component.type === 'VTODO')
     .map((item) => {
       const c = item.component;
       const completed = /^STATUS:COMPLETED/m.test(item.rawData);
+      const start = parseICSDate(c.start);
+      const due = parseICSDate((c as any).due);
+      const allDay = start != null
+        ? isAllDayTask(item.rawData)
+        : due != null && /^DUE(?:;[^:\r\n]*)?:\d{8}\s*$/m.test(item.rawData);
       return {
         uid: c.uid ?? '',
         summary: c.summary ?? 'Untitled',
         description: (c as any).description as string | undefined,
-        start: parseICSDate(c.start),
-        due: parseICSDate((c as any).due),
+        start,
+        due,
         completed,
-        repeating: !!c.rrule,
+        allDay,
         calendarName: item.calendarName,
         calendarColor: item.calendarColor,
       };

@@ -5,7 +5,7 @@ export interface CalendarTask {
   start?: Date;
   due?: Date;
   completed: boolean;
-  repeating: boolean;
+  allDay: boolean;
   calendarName: string;
   calendarColor?: string;
 }
