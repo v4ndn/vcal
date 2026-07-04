@@ -11,6 +11,7 @@ export interface PresetEvent {
   rrule: string;
   reminders: number[];
   calendarName: string;
+  calendarColor?: string;
   type: 'VEVENT' | 'VTODO';
   allDay?: boolean;
 }

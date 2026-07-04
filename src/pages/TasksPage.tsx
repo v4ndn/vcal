@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { Search, Check, ChevronDown, Pencil, Trash2, Plus } from 'lucide-react';
 import { AnimatePresence } from 'motion/react';
 import Markdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { useCalendarStore } from '../entities/calendar/model/store';
 import { useThemeStore } from '../entities/theme/model/store';
 import { getTasks } from '../shared/lib/getTasks';
@@ -233,7 +234,7 @@ function TaskRow({
             [&_h1]:text-[12px] [&_h1]:font-semibold [&_h1]:m-0
             [&_h2]:text-[12px] [&_h2]:font-semibold [&_h2]:m-0
             [&_h3]:text-[12px] [&_h3]:font-semibold [&_h3]:m-0">
-            <Markdown>{task.description}</Markdown>
+            <Markdown remarkPlugins={[remarkGfm]}>{task.description}</Markdown>
           </div>
         )}
       </div>
@@ -265,11 +266,14 @@ export default function TasksPage() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable) return;
       if (e.key === 'Escape') { setSelectedUids(new Set()); setContextMenu(null); }
+      else if (e.key === 'n' || e.key === 'N') { openNewTask(selectedDate); }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [selectedDate]);
 
   const handleToggleSelect = useCallback((uid: string) => {
     setSelectedUids((prev) => {

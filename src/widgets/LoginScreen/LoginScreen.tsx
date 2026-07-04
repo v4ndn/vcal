@@ -49,7 +49,7 @@ export default function LoginScreen() {
   return (
     <div className="min-h-screen bg-white flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-bold tracking-tight text-black mb-1">vcalendar</h1>
+        <h1 className="text-2xl font-bold tracking-tight text-black mb-1">vcal</h1>
         <p className="text-sm text-gray-400 mb-8">Connect to your CalDAV server</p>
 
         <form onSubmit={handleSubmit(onSubmit)} className="flex flex-col gap-4">

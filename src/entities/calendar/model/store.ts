@@ -6,6 +6,27 @@ import type { CalendarEvent } from '../../event/model/types';
 import { expandItems } from '../../../shared/lib/expandItems';
 import { updateICSTimes, updateEventFull, addExdate, parseICSDescription, formatICSDate, setTaskStatus, updateTaskFull, buildJournalICS, updateJournalFull } from '../../../shared/lib/icsUpdate';
 import { useAuthStore } from '../../auth/model/store';
+import { useToastStore } from '../../ui/model/toastStore';
+import { useThemeStore } from '../../theme/model/store';
+
+// ── Undo (single-level) ─────────────────────────────────────────────────────────
+// Every mutation reduces to a set of these inverse ops against the CalDAV store.
+type InverseOp =
+  | { kind: 'upsert'; objectUrl: string; calendarName: string; calendarColor?: string; rawData: string }
+  | { kind: 'remove'; objectUrl: string; etag?: string };
+
+type UndoEntry = { label: string; ops: InverseOp[] };
+
+const upsertOp = (it: StoredItem): InverseOp => ({
+  kind: 'upsert', objectUrl: it.objectUrl, calendarName: it.calendarName, calendarColor: it.calendarColor, rawData: it.rawData,
+});
+const removeOp = (objectUrl: string, etag?: string): InverseOp => ({ kind: 'remove', objectUrl, etag });
+const sumOf = (it: StoredItem): string => it.component.summary ?? 'item';
+
+// Module-level batch collector so bulk external loops (paste, preset drop) coalesce into one entry.
+let _batchOpen = false;
+let _batchLabel = '';
+let _batchOps: InverseOp[] = [];
 
 function buildStandaloneICS(
   uid: string,
@@ -66,7 +87,12 @@ interface CalendarStore {
   loading: boolean;
   weekOffset: number;
   hiddenCalendars: Set<string>;
+  undoStack: UndoEntry[];
 
+  recordUndo: (label: string, ops: InverseOp[]) => void;
+  beginUndoBatch: (label: string) => void;
+  commitUndoBatch: () => void;
+  undo: () => Promise<void>;
   fetch: () => Promise<void>;
   setWeekOffset: (offset: number) => void;
   toggleCalendar: (name: string) => void;
@@ -101,6 +127,96 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
   loading: true,
   weekOffset: 0,
   hiddenCalendars: new Set<string>(),
+  undoStack: [],
+
+  recordUndo: (label, ops) => {
+    if (!ops.length) return;
+    if (_batchOpen) { _batchOps.push(...ops); return; }
+    set((s) => {
+      const max = Math.max(1, useThemeStore.getState().maxUndo);
+      return { undoStack: [...s.undoStack, { label, ops }].slice(-max) };
+    });
+  },
+
+  beginUndoBatch: (label) => { _batchOpen = true; _batchLabel = label; _batchOps = []; },
+
+  commitUndoBatch: () => {
+    _batchOpen = false;
+    const raw = _batchOps;
+    _batchOps = [];
+    // Dedupe by objectUrl keeping the FIRST op — so restoring a shared object
+    // (e.g. a recurring master EXDATE'd once per moved occurrence) uses its most
+    // original state, not an intermediate one.
+    const seen = new Set<string>();
+    const ops: InverseOp[] = [];
+    for (const op of raw) {
+      if (seen.has(op.objectUrl)) continue;
+      seen.add(op.objectUrl);
+      ops.push(op);
+    }
+    if (!ops.length) return;
+    set((s) => {
+      const max = Math.max(1, useThemeStore.getState().maxUndo);
+      return { undoStack: [...s.undoStack, { label: _batchLabel, ops }].slice(-max) };
+    });
+  },
+
+  undo: async () => {
+    const { undoStack, items, weekOffset } = get();
+    if (!undoStack.length) return;
+    const entry = undoStack[undoStack.length - 1];
+    set({ undoStack: undoStack.slice(0, -1) }); // pop
+
+    // Optimistic local apply
+    let nextItems = [...items];
+    for (const op of entry.ops) {
+      if (op.kind === 'upsert') {
+        const parsed = ical.parseICS(op.rawData);
+        const comp = Object.values(parsed).find(
+          (c) => c.type === 'VEVENT' || c.type === 'VTODO' || c.type === 'VJOURNAL',
+        ) as StoredItem['component'] | undefined;
+        if (!comp) continue;
+        const restored: StoredItem = {
+          component: comp,
+          calendarName: op.calendarName,
+          calendarColor: op.calendarColor,
+          objectUrl: op.objectUrl,
+          etag: undefined,
+          rawData: op.rawData,
+        };
+        const idx = nextItems.findIndex((i) => i.objectUrl === op.objectUrl);
+        if (idx >= 0) nextItems[idx] = restored; else nextItems.push(restored);
+      } else {
+        nextItems = nextItems.filter((i) => i.objectUrl !== op.objectUrl);
+      }
+    }
+    set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+
+    // Server sync
+    try {
+      const client = await getClient();
+      for (const op of entry.ops) {
+        if (op.kind === 'upsert') {
+          // PUT without If-Match overwrites, or creates the object if it was deleted.
+          try {
+            await client.updateCalendarObject({
+              calendarObject: { url: op.objectUrl, data: op.rawData, etag: undefined },
+            });
+          } catch {
+            const calUrl = op.objectUrl.replace(/\/[^/]+$/, '/');
+            const filename = op.objectUrl.split('/').pop() ?? `${crypto.randomUUID()}.ics`;
+            await (client as any).createCalendarObject({ calendar: { url: calUrl }, filename, iCalString: op.rawData });
+          }
+        } else {
+          await client.deleteCalendarObject({ calendarObject: { url: op.objectUrl, etag: op.etag } });
+        }
+      }
+    } catch (err) {
+      console.error('[vcalendar] undo error:', err);
+      await get().fetch();
+    }
+    useToastStore.getState().showToast(`Undone: ${entry.label}`);
+  },
 
   setWeekOffset: (offset) =>
     set((state) => ({
@@ -127,10 +243,14 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         const calendarColor = normalizeColor(calendar.calendarColor);
         const calendarUrl = (calendar.url as string | undefined) ?? '';
         const supportedComponents = (calendar.components ?? []).map((c) => c.toUpperCase());
-        const isJournal = supportedComponents.includes('VJOURNAL') &&
-          !supportedComponents.includes('VEVENT') &&
-          !supportedComponents.includes('VTODO');
-        const meta: CalendarMeta = { name: calendarName, color: calendarColor, url: calendarUrl, isJournal };
+        const supportsJournal = supportedComponents.includes('VJOURNAL');
+        const supportsEvents = supportedComponents.includes('VEVENT');
+        const supportsTasks = supportedComponents.includes('VTODO');
+        // A collection can be both a calendar and a journal. Fall back to
+        // "calendar" when the server reports no components (unless it's journal-only).
+        const isJournal = supportsJournal;
+        const isCalendar = supportsEvents || supportsTasks || !supportsJournal;
+        const meta: CalendarMeta = { name: calendarName, color: calendarColor, url: calendarUrl, isJournal, isCalendar };
 
         const objects = await client.fetchCalendarObjects({
           calendar,
@@ -200,6 +320,8 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         ? [...updatedItems, { component: newComponent, calendarName: item.calendarName, calendarColor: item.calendarColor, objectUrl: newObjectUrl, etag: undefined, rawData: newICS }]
         : updatedItems;
       set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+      // Undo: restore the master's pre-EXDATE ICS + drop the detached standalone.
+      get().recordUndo(`Move "${event.summary}"`, [upsertOp(item), removeOp(newObjectUrl)]);
 
       try {
         const client = await getClient();
@@ -230,6 +352,8 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     const updatedComponent = { ...item.component, start: newStart, end: newEnd };
     const updatedItems = items.map((i) => i === item ? { ...i, component: updatedComponent } : i);
     set({ items: updatedItems, events: expandItems(updatedItems, weekOffset) });
+    // Undo: restore the original ICS (pre-move times).
+    get().recordUndo(`Move "${event.summary}"`, [upsertOp(item)]);
 
     try {
       const updatedICS = updateICSTimes(item.rawData, newStart, newEnd);
@@ -299,6 +423,8 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         ? [...updatedItems, { component: newComponent, calendarName: newCalName, calendarColor: newCalColor, objectUrl: `${destCalendarUrl}${newUid}.ics`, etag: undefined, rawData: newICS }]
         : updatedItems;
       set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+      // Undo: restore the master's pre-EXDATE ICS + drop the detached standalone.
+      get().recordUndo(`Edit "${event.summary}"`, [upsertOp(item), removeOp(`${destCalendarUrl}${newUid}.ics`)]);
 
       try {
         const client = await getClient();
@@ -336,6 +462,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     }
     const updatedICS = updateEventFull(item.rawData, allOpts, 'all', event.occurrenceStart ?? event.start, event.type);
 
+    const undoSnapshot = upsertOp(item); // original ICS @ original calendar
     try {
       const client = await getClient();
       if (calendarChanged && targetCalMeta) {
@@ -349,6 +476,8 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         await client.deleteCalendarObject({
           calendarObject: { url: item.objectUrl, etag: item.etag },
         });
+        // Undo: remove the copy in the new calendar + restore the original.
+        get().recordUndo(`Edit "${event.summary}"`, [removeOp(`${targetUrl}${filename}`), undoSnapshot]);
       } else {
         const res = await client.updateCalendarObject({
           calendarObject: { url: item.objectUrl, data: updatedICS, etag: item.etag },
@@ -357,6 +486,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
           console.error('[vcalendar] updateEventDetails PUT failed:', res?.status);
           return;
         }
+        get().recordUndo(`Edit "${event.summary}"`, [undoSnapshot]);
       }
       await get().fetch();
     } catch (err) {
@@ -370,34 +500,58 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     if (!item) return;
 
     const isRecurring = event.uid !== event.baseUid;
-    const client = await getClient();
+    const removeWhole = !isRecurring || scope === 'all';
+
+    // Apply the optimistic state SYNCHRONOUSLY, before any `await` (getClient may
+    // do a network login on first use). Otherwise the occurrence renders one more
+    // frame — the flash the user sees — before the exclusion lands.
+    let updatedICS = '';
+    if (removeWhole) {
+      const nextItems = items.filter((i) => i !== item);
+      set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+    } else {
+      const occurrenceDate = event.occurrenceStart ?? event.start;
+      const dateKey = occurrenceDate.toISOString().substring(0, 10);
+      updatedICS = addExdate(item.rawData, occurrenceDate);
+      const nextItems = items.map((i) =>
+        i === item
+          ? {
+              ...i,
+              rawData: updatedICS,
+              component: {
+                ...i.component,
+                exdate: { ...(i.component.exdate ?? {}), [dateKey]: occurrenceDate },
+              },
+            }
+          : i,
+      );
+      set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+    }
+    // Undo: re-create the whole object, or restore the master's pre-EXDATE ICS.
+    get().recordUndo(
+      removeWhole ? `Delete "${event.summary}"` : `Delete occurrence of "${event.summary}"`,
+      [upsertOp(item)],
+    );
 
     try {
-      if (!isRecurring || scope === 'all') {
-        // Optimistic: remove from local state immediately
-        const nextItems = items.filter((i) => i !== item);
-        set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+      const client = await getClient();
+      if (removeWhole) {
         await client.deleteCalendarObject({
           calendarObject: { url: item.objectUrl, etag: item.etag },
         });
       } else {
-        // scope === 'single': exclude this occurrence via EXDATE
-        const updatedICS = addExdate(item.rawData, event.occurrenceStart ?? event.start);
         const res = await client.updateCalendarObject({
           calendarObject: { url: item.objectUrl, data: updatedICS, etag: item.etag },
         }) as Response | undefined;
         if ((res?.status ?? 0) >= 400) {
           console.error('[vcalendar] deleteEvent EXDATE PUT failed:', res?.status);
-          return;
+          set({ items, events: expandItems(items, weekOffset) });
         }
-        await get().fetch();
       }
     } catch (err) {
       console.error('[vcalendar] deleteEvent error:', err);
-      // Restore on failure for the optimistic case
-      if (!isRecurring || scope === 'all') {
-        set({ items, events: expandItems(items, weekOffset) });
-      }
+      // Restore the pre-delete snapshot on failure (all paths are optimistic).
+      set({ items, events: expandItems(items, weekOffset) });
     }
   },
 
@@ -450,6 +604,14 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       });
     }
     set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+    // Undo: restore every removed object + each affected series' pre-EXDATE master.
+    const undoOps: InverseOp[] = [];
+    for (const ev of nonRecurring) {
+      const it = items.find((i) => i.component.uid === ev.baseUid);
+      if (it) undoOps.push(upsertOp(it));
+    }
+    for (const { item } of seriesUpdates) undoOps.push(upsertOp(item));
+    get().recordUndo(`Delete ${eventsToDelete.length} events`, undoOps);
 
     try {
       const client = await getClient();
@@ -481,6 +643,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
 
     const nextItems = items.map((i) => (i === item ? { ...i, rawData: updatedICS } : i));
     set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+    get().recordUndo(`${wasCompleted ? 'Reopen' : 'Complete'} "${sumOf(item)}"`, [upsertOp(item)]);
 
     try {
       const client = await getClient();
@@ -501,6 +664,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     const updatedICS = updateTaskFull(item.rawData, opts);
     const calendarChanged = !!targetCalendarName && targetCalendarName !== item.calendarName;
     const targetCalMeta = calendarChanged ? calendars.find((c) => c.name === targetCalendarName) : undefined;
+    const undoSnapshot = upsertOp(item); // original ICS @ original calendar
 
     if (!calendarChanged) {
       // Optimistic update for same-calendar case
@@ -512,6 +676,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         i === item ? { ...i, component: newComponent ?? i.component, rawData: updatedICS } : i,
       );
       set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+      get().recordUndo(`Edit task "${opts.summary}"`, [undoSnapshot]);
     }
 
     try {
@@ -527,6 +692,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
         await client.deleteCalendarObject({
           calendarObject: { url: item.objectUrl, etag: item.etag },
         });
+        get().recordUndo(`Edit task "${opts.summary}"`, [removeOp(`${targetUrl}${filename}`), undoSnapshot]);
         await get().fetch();
       } else {
         await client.updateCalendarObject({
@@ -545,6 +711,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     if (!item) return;
     const nextItems = items.filter((i) => i !== item);
     set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+    get().recordUndo(`Delete task "${sumOf(item)}"`, [upsertOp(item)]);
     try {
       const client = await getClient();
       await client.deleteCalendarObject({ calendarObject: { url: item.objectUrl, etag: item.etag } });
@@ -561,6 +728,7 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     if (!toDelete.length) return;
     const nextItems = items.filter((i) => !toDelete.includes(i));
     set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+    get().recordUndo(`Delete ${toDelete.length} tasks`, toDelete.map(upsertOp));
     try {
       const client = await getClient();
       await Promise.all(
@@ -639,6 +807,9 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
       };
       const nextItems = [...items, newItem];
       set({ items: nextItems, events: expandItems(nextItems, weekOffset) });
+      // Undo: remove the created object. Recorded before any await so batches
+      // (paste / preset drop) collect every item's op before commit.
+      get().recordUndo(`Create "${opts.summary || 'event'}"`, [removeOp(objectUrl)]);
     }
 
     try {
@@ -659,38 +830,16 @@ export const useCalendarStore = create<CalendarStore>((set, get) => ({
     const { items } = get();
     const item = items.find((i) => i.component.uid === event.baseUid);
     if (!item) return;
-
-    const fmt = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
-    const now = new Date();
-    const newUid = crypto.randomUUID();
-
-    const ics = [
-      'BEGIN:VCALENDAR',
-      'VERSION:2.0',
-      'PRODID:-//vcalendar//EN',
-      'BEGIN:VEVENT',
-      `UID:${newUid}`,
-      `DTSTART:${fmt(event.start)}`,
-      ...(event.end ? [`DTEND:${fmt(event.end)}`] : []),
-      `SUMMARY:${event.summary}`,
-      `DTSTAMP:${fmt(now)}`,
-      'END:VEVENT',
-      'END:VCALENDAR',
-    ].join('\r\n');
-
-    try {
-      const client = await getClient();
-      // Derive the calendar collection URL from the object URL
-      const calendarUrl = item.objectUrl.replace(/\/[^/]+$/, '/');
-      await (client as any).createCalendarObject({
-        calendar: { url: calendarUrl },
-        filename: `${newUid}.ics`,
-        iCalString: ics,
-      });
-      await get().fetch();
-    } catch (err) {
-      console.error('[vcalendar] createEvent failed:', err);
-    }
+    await get().createNewEvent(item.calendarName, {
+      summary: event.summary,
+      start: event.start,
+      end: event.end,
+      description: event.description ?? '',
+      rrule: '',
+      reminders: [],
+      type: event.type,
+      allDay: event.allDay,
+    });
   },
 
   createJournal: async (calendarName, opts) => {

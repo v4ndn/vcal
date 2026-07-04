@@ -189,16 +189,35 @@ export default function AllDayRow({
         {allDayPresetEvents.map((ev, i) => {
           const col = presetDropPreview!.dropColIdx;
           if (col < 0 || col >= numCols) return null;
+          const style = {
+            position: 'absolute' as const,
+            left: `calc(${(col / numCols) * 100}% + 2px)`,
+            width: `calc(${(1 / numCols) * 100}% - 4px)`,
+            top: numRows * ROW_H + 2,
+            height: ROW_H - 4,
+          };
+          if (ev.type === 'VTODO') {
+            const color = ev.calendarColor ?? '#9ca3af';
+            return (
+              <div
+                key={`preset-${i}`}
+                style={{
+                  ...style,
+                  backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`,
+                  border: `2px dashed ${color}`,
+                  opacity: 0.75,
+                }}
+                className="rounded-sm px-1.5 flex items-center gap-1 pointer-events-none"
+              >
+                <div className="shrink-0 w-3 h-3 rounded" style={{ border: `1.5px solid ${color}` }} />
+                <span className="text-[11px] font-semibold truncate leading-none" style={{ color }}>{ev.summary}</span>
+              </div>
+            );
+          }
           return (
             <div
               key={`preset-${i}`}
-              style={{
-                position: 'absolute',
-                left: `calc(${(col / numCols) * 100}% + 2px)`,
-                width: `calc(${(1 / numCols) * 100}% - 4px)`,
-                top: numRows * ROW_H + 2,
-                height: ROW_H - 4,
-              }}
+              style={style}
               className="rounded-sm border-2 border-dashed border-th-muted/60 bg-th-subtle/60 px-1.5 flex items-center pointer-events-none"
             >
               <span className="text-[11px] font-semibold text-th-muted truncate leading-none">{ev.summary}</span>

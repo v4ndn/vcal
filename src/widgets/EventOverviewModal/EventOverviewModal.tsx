@@ -1,4 +1,6 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
 import { motion } from 'motion/react';
 import { X, Calendar, Clock, RefreshCw, Bell, Tag } from 'lucide-react';
 import { useCalendarStore } from '../../entities/calendar/model/store';
@@ -97,7 +99,7 @@ export default function EventOverviewModal({ event, onClose }: Props) {
             <>
               <div className="h-px bg-th-border" />
               <div className="prose prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                <ReactMarkdown>{description}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]}>{description}</ReactMarkdown>
               </div>
             </>
           )}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route, NavLink, useLocation } from 'react-router-dom';
+import { Routes, Route, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { CalendarDays, ListTodo, BookOpen } from 'lucide-react';
+import { CalendarDays, ListTodo, BookOpen, Settings, RefreshCw, LogOut, Keyboard } from 'lucide-react';
 import { useCalendarStore, resetCalendarClient } from './entities/calendar/model/store';
 import { useAuthStore } from './entities/auth/model/store';
 import { usePresetsStore } from './entities/presets/model/store';
@@ -13,6 +13,9 @@ import WeekStrip from './widgets/WeekStrip/WeekStrip';
 import LoginScreen from './widgets/LoginScreen/LoginScreen';
 import TasksPage from './pages/TasksPage';
 import JournalPage from './pages/JournalPage';
+import Preferences from './widgets/ThemePreferences/ThemePreferences';
+import ShortcutsModal from './shared/ui/ShortcutsModal';
+import Toast from './shared/ui/Toast';
 
 const pageVariants = {
   enter:  { opacity: 0, scale: 1.01 },
@@ -52,9 +55,14 @@ function App() {
   const location = useLocation();
 
   const config = useAuthStore((s) => s.config);
+  const clearConfig = useAuthStore((s) => s.clearConfig);
   const fetch = useCalendarStore((s) => s.fetch);
+  const loading = useCalendarStore((s) => s.loading);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
+  const [showThemePrefs, setShowThemePrefs] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const navigate = useNavigate();
 
   const activeId = useThemeStore((s) => s.activeId);
   const custom = useThemeStore((s) => s.custom);
@@ -93,41 +101,99 @@ function App() {
     fetch().catch(console.error);
   }, [config, fetch]);
 
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable) return;
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        useCalendarStore.getState().undo().catch(console.error);
+        return;
+      }
+      if (e.key === '?') { setShowShortcuts((v) => !v); return; }
+      if (e.key === 'r' || e.key === 'R') { if (!loading) fetch().catch(console.error); return; }
+      if (e.key === '1') { navigate('/'); return; }
+      if (e.key === '2') { navigate('/tasks'); return; }
+      if (e.key === '3') { navigate('/journals'); return; }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fetch, loading, navigate]);
+
   if (!config) return <LoginScreen />;
 
   return (
-    <div className="flex h-screen overflow-hidden bg-th-bg">
-      {/* Mobile backdrop */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/30 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-
-      {sidebarSide !== 'right' && <CalendarSidebar />}
-
-      <div className="flex-1 min-w-0 relative overflow-hidden">
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={location.pathname}
-            className="absolute inset-0"
-            variants={pageVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ duration: 0.09, ease: 'easeOut' }}
+    <div className="flex flex-col h-screen overflow-hidden bg-th-bg">
+      {/* Top navbar */}
+      <header className="flex items-center justify-between px-4 h-[49px] border-b border-th-border bg-th-surface shrink-0 z-50">
+        <span className="text-sm font-bold tracking-tight text-th-text">vcal</span>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={() => setShowShortcuts(true)}
+            title="Keyboard shortcuts (?)"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors"
           >
-            <Routes location={location}>
-              <Route path="/" element={<WeekStrip />} />
-              <Route path="/tasks" element={<TasksPage />} />
-              <Route path="/journals" element={<JournalPage />} />
-            </Routes>
-          </motion.div>
-        </AnimatePresence>
-      </div>
+            <Keyboard size={13} />
+          </button>
+          <button
+            onClick={() => setShowThemePrefs(true)}
+            title="Preferences"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors"
+          >
+            <Settings size={13} />
+          </button>
+          <button
+            onClick={() => fetch().catch(console.error)}
+            disabled={loading}
+            title="Refresh"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors disabled:opacity-30"
+          >
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          </button>
+          <button
+            onClick={clearConfig}
+            title="Disconnect"
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-th-muted hover:text-th-text hover:bg-th-subtle transition-colors"
+          >
+            <LogOut size={13} />
+          </button>
+        </div>
+      </header>
 
-      {sidebarSide === 'right' && <CalendarSidebar />}
+      {/* Body */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Mobile backdrop */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 z-30 bg-black/30 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
+        )}
+
+        {sidebarSide !== 'right' && <CalendarSidebar />}
+
+        <div className="flex-1 min-w-0 relative overflow-hidden">
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={location.pathname}
+              className="absolute inset-0"
+              variants={pageVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.09, ease: 'easeOut' }}
+            >
+              <Routes location={location}>
+                <Route path="/" element={<WeekStrip />} />
+                <Route path="/tasks" element={<TasksPage />} />
+                <Route path="/journals" element={<JournalPage />} />
+              </Routes>
+            </motion.div>
+          </AnimatePresence>
+        </div>
+
+        {sidebarSide === 'right' && <CalendarSidebar />}
+      </div>
 
       {/* Mobile bottom tab bar */}
       <nav className="fixed bottom-0 left-0 right-0 h-14 bg-th-surface border-t border-th-border flex md:hidden z-20">
@@ -167,6 +233,9 @@ function App() {
         </NavLink>
       </nav>
 
+      {showThemePrefs && <Preferences onClose={() => setShowThemePrefs(false)} />}
+      {showShortcuts && <ShortcutsModal onClose={() => setShowShortcuts(false)} />}
+      <Toast />
       <PresetDragOverlay />
     </div>
   );

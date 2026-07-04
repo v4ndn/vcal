@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Plus, Search, FileText, Folder, FolderOpen, BookOpen, Trash2, Pencil, X } from 'lucide-react';
+import { Plus, Search, FileText, Folder, FolderOpen, BookOpen, Trash2, Pencil, X, Code2, Eye } from 'lucide-react';
 import * as LucideIcons from 'lucide-react';
 import { useCalendarStore } from '../entities/calendar/model/store';
 import { useUIStore } from '../entities/ui/model/store';
@@ -298,6 +298,7 @@ function NoteEditor({ journal }: NoteEditorProps) {
   const [body, setBody] = useState(journal.description);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [rawMode, setRawMode] = useState(false);
   const bodyRef = useRef(body);
   bodyRef.current = body;
 
@@ -321,6 +322,21 @@ function NoteEditor({ journal }: NoteEditorProps) {
     }
   };
 
+  // Ctrl/Cmd+S saves the note (works while typing in the editor). Refs avoid stale closures.
+  const saveStateRef = useRef({ dirty, saving, save: handleSave });
+  saveStateRef.current = { dirty, saving, save: handleSave };
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        const { dirty: d, saving: s, save } = saveStateRef.current;
+        if (d && !s) save();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const bodyWrapRef = useRef<HTMLDivElement>(null);
 
   function focusEditorAtEnd() {
@@ -337,8 +353,8 @@ function NoteEditor({ journal }: NoteEditorProps) {
 
   return (
     <div className="flex flex-col h-full relative">
-      {dirty && (
-        <div className="absolute top-3 right-4 z-10">
+      <div className="absolute top-3 right-4 z-10 flex items-center gap-1.5">
+        {dirty && (
           <button
             onClick={handleSave}
             disabled={saving}
@@ -346,24 +362,45 @@ function NoteEditor({ journal }: NoteEditorProps) {
           >
             {saving ? 'Saving…' : 'Save'}
           </button>
+        )}
+        <button
+          onClick={() => setRawMode((v) => !v)}
+          title={rawMode ? 'Switch to editor' : 'Switch to raw'}
+          className={`w-7 h-7 flex items-center justify-center rounded-lg transition-colors shadow-sm ${
+            rawMode
+              ? 'bg-th-accent text-th-accent-fg'
+              : 'bg-th-surface border border-th-border text-th-muted hover:text-th-text'
+          }`}
+        >
+          {rawMode ? <Eye size={13} /> : <Code2 size={13} />}
+        </button>
+      </div>
+
+      {rawMode ? (
+        <textarea
+          value={body ?? ''}
+          onChange={(e) => { setBody(e.target.value); setDirty(true); }}
+          placeholder="Start writing…"
+          className="flex-1 w-full resize-none px-6 py-4 bg-transparent text-th-text font-mono text-sm outline-none placeholder-th-muted/40 leading-relaxed"
+        />
+      ) : (
+        <div
+          ref={bodyWrapRef}
+          className="flex-1 overflow-y-auto px-6 py-4 cursor-text"
+          onClick={(e) => {
+            if ((e.target as HTMLElement).closest('[contenteditable]')) return;
+            focusEditorAtEnd();
+          }}
+        >
+          <MarkdownEditor
+            key={journal.uid}
+            defaultValue={body}
+            onChange={handleBodyChange}
+            placeholder="Start writing…"
+            className="min-h-full"
+          />
         </div>
       )}
-      <div
-        ref={bodyWrapRef}
-        className="flex-1 overflow-y-auto px-6 py-4 cursor-text"
-        onClick={(e) => {
-          if ((e.target as HTMLElement).closest('[contenteditable]')) return;
-          focusEditorAtEnd();
-        }}
-      >
-        <MarkdownEditor
-          key={journal.uid}
-          defaultValue={body}
-          onChange={handleBodyChange}
-          placeholder="Start writing…"
-          className="min-h-full"
-        />
-      </div>
     </div>
   );
 }
@@ -518,6 +555,16 @@ export default function JournalPage() {
     if (selectedUid) localStorage.setItem('vcalendar-journal-selected-note', selectedUid);
     else localStorage.removeItem('vcalendar-journal-selected-note');
   }, [selectedUid]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable) return;
+      if (e.key === 'n' || e.key === 'N') { handleCreate('', calendars[0]?.name ?? ''); }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [calendars]);
 
   // ── handlers ───────────────────────────────────────────────────────────────
 

@@ -35,6 +35,16 @@ function EditorInner({ defaultValue, onChange }: EditorInnerProps) {
     const li = target.closest('li[data-item-type="task"]') as HTMLElement | null;
     if (!li) return;
 
+    // The checkbox is a ::before pseudo-element at the left edge of the li, so a
+    // click on it reports the li as target. Only toggle when the click actually
+    // lands within the checkbox box — clicking the text just edits normally.
+    const rect = li.getBoundingClientRect();
+    const cs = getComputedStyle(li);
+    const fs = parseFloat(cs.fontSize) || 16;
+    const boxLeft = rect.left + (parseFloat(cs.paddingLeft) || 0);
+    const boxRight = boxLeft + fs * 0.85 + fs * 0.25; // checkbox width + small tolerance
+    if (e.clientX < boxLeft - fs * 0.25 || e.clientX > boxRight) return;
+
     const editor = get();
     if (!editor) return;
 

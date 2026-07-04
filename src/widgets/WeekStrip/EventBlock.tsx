@@ -1,5 +1,5 @@
-import { motion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import type { CalendarEvent } from '../../entities/event/model/types';
 
 const mdComponents: React.ComponentProps<typeof ReactMarkdown>['components'] = {
@@ -37,7 +37,9 @@ export default function EventBlock({
   const widthPct = (1 / numCols) * 100;
 
   return (
-    <motion.div
+    <div
+      data-block-uid={event.uid}
+      data-block-kind="event"
       className={`absolute rounded-md px-1.5 py-1 overflow-hidden z-20 hover:brightness-90 transition-[filter] cursor-grab active:cursor-grabbing${isSelected ? ' ring-2 ring-th-accent ring-offset-1 ring-offset-th-bg' : ''}`}
       style={{
         top: `${top}vh`,
@@ -46,10 +48,8 @@ export default function EventBlock({
         left: `calc(${colPct}% + 2px)`,
         width: `calc(${widthPct}% - ${numCols > 1 ? 3 : 4}px)`,
         backgroundColor: color ?? 'var(--th-subtle)',
+        opacity: isDragging ? 0 : 1,
       }}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: isDragging ? 0 : 1 }}
-      transition={{ opacity: { duration: isDragging ? 0 : 0.2 } }}
       onPointerDown={onPointerDown}
       onContextMenu={onContextMenu}
     >
@@ -70,7 +70,7 @@ export default function EventBlock({
             WebkitMaskImage: 'linear-gradient(to bottom, black 55%, transparent 100%)',
           }}
         >
-          <ReactMarkdown components={mdComponents}>{event.description}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{event.description}</ReactMarkdown>
         </div>
       )}
       {height > 4 && (
@@ -81,6 +81,6 @@ export default function EventBlock({
           <div className={`w-6 h-0.5 rounded-full ${color ? 'bg-white/40' : 'bg-th-muted/40'}`} />
         </div>
       )}
-    </motion.div>
+    </div>
   );
 }

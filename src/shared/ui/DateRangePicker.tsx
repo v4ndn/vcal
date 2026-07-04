@@ -58,11 +58,14 @@ interface CGridProps {
   onKey(e: React.KeyboardEvent): void;
   onPrev(): void;
   onNext(): void;
+  minDate?: Date|null;
 }
 
-function CalGrid({ vy, vm, lo, hi, focus, onDay, onKey, onPrev, onNext }: CGridProps) {
+function CalGrid({ vy, vm, lo, hi, focus, onDay, onKey, onPrev, onNext, minDate }: CGridProps) {
   const today = mid(new Date());
   const cells = mkGrid(vy, vm);
+  const minT = minDate ? mid(minDate).getTime() : null;
+  const isDisabled = (d: Date) => minT !== null && d.getTime() < minT;
 
   function cs(d: Date): React.CSSProperties {
     const inM  = d.getMonth() === vm;
@@ -71,8 +74,9 @@ function CalGrid({ vy, vm, lo, hi, focus, onDay, onKey, onPrev, onNext }: CGridP
     const bet  = lo && hi && !isLo && !isHi && t > lo.getTime() && t < hi.getTime();
     const foc  = sameD(d,focus) && !isLo && !isHi && !bet;
     const both = sameD(lo,hi);
+    const disabled = isDisabled(d);
     let bg = 'transparent', col = 'var(--th-text)', fw: string|undefined, r = '8px';
-    const opacity = (isLo || isHi || bet) ? 1 : inM ? 1 : 0.35;
+    const opacity = disabled ? 0.2 : (isLo || isHi || bet) ? 1 : inM ? 1 : 0.35;
     if (sameD(d,today) && !isLo && !isHi) fw = '700';
     if (bet)          { bg = 'var(--th-subtle)'; r = '0'; }
     if (isLo || isHi) {
@@ -82,7 +86,7 @@ function CalGrid({ vy, vm, lo, hi, focus, onDay, onKey, onPrev, onNext }: CGridP
     return {
       width: '100%', height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center',
       border: 'none', background: bg, color: col, borderRadius: r,
-      fontSize: 12, fontWeight: fw, cursor: 'pointer', padding: 0, opacity,
+      fontSize: 12, fontWeight: fw, cursor: disabled ? 'default' : 'pointer', padding: 0, opacity,
       boxShadow: foc ? 'inset 0 0 0 1.5px var(--th-accent)' : 'none',
     };
   }
@@ -110,8 +114,8 @@ function CalGrid({ vy, vm, lo, hi, focus, onDay, onKey, onPrev, onNext }: CGridP
       {Array.from({length:6}, (_,w) => (
         <div key={w} style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',rowGap:2}}>
           {cells.slice(w*7, w*7+7).map((d,i) => (
-            <button key={i} type="button" onClick={() => onDay(d)}
-              className={!sameD(d,lo) && !sameD(d,hi) ? 'hover:!bg-th-hover' : ''}
+            <button key={i} type="button" disabled={isDisabled(d)} onClick={() => onDay(d)}
+              className={!isDisabled(d) && !sameD(d,lo) && !sameD(d,hi) ? 'hover:!bg-th-hover' : ''}
               style={cs(d)}>
               {d.getDate()}
             </button>
@@ -393,6 +397,107 @@ export function DateRangePicker({ start, end, onApply, placeholder = 'Select dat
           className="absolute right-2.5 top-1/2 -translate-y-1/2 text-th-muted hover:text-th-text transition-colors">
           <CalendarIcon />
         </button>
+      </div>
+      {open && createPortal(panel, document.body)}
+    </div>
+  );
+}
+
+// ── DatePicker (single date) ────────────────────────────────────────────────────
+
+interface DPProps {
+  value: string;                 // 'YYYY-MM-DD' (time part, if any, is ignored)
+  onChange(date: string): void;  // emits 'YYYY-MM-DD' (or '' when cleared)
+  placeholder?: string;
+  minDate?: Date | null;
+  clearable?: boolean;
+}
+
+export function DatePicker({ value, onChange, placeholder = 'Select date', minDate, clearable }: DPProps) {
+  const today = mid(new Date());
+  const [open, setOpen] = useState(false);
+  const cRef = useRef<HTMLDivElement>(null);
+  const pRef = useRef<HTMLDivElement>(null);
+
+  const sel = parseDt(value);
+  const [vy, setVy]   = useState(() => sel?.getFullYear() ?? today.getFullYear());
+  const [vm, setVm]   = useState(() => sel?.getMonth() ?? today.getMonth());
+  const [foc, setFoc] = useState<Date>(() => sel ?? today);
+
+  // sync view to external value changes (e.g. edit modal reset)
+  const prevV = useRef(value);
+  useEffect(() => {
+    if (value !== prevV.current) {
+      prevV.current = value;
+      const d = parseDt(value);
+      if (d) { setFoc(d); setVy(d.getFullYear()); setVm(d.getMonth()); }
+    }
+  });
+
+  const pos = usePanelPos(open, cRef, 380);
+  useCloseOnOutside(open, [cRef, pRef], () => setOpen(false));
+
+  function commit(d: Date) {
+    if (minDate && d.getTime() < mid(minDate).getTime()) return;
+    onChange(toDStr(d).slice(0, 10));
+    setOpen(false);
+  }
+  function prevM() { let m=vm-1,y=vy; if(m<0){m=11;y--;} setVm(m); setVy(y); }
+  function nextM() { let m=vm+1,y=vy; if(m>11){m=0;y++;} setVm(m); setVy(y); }
+  function onKey(e: React.KeyboardEvent) {
+    const map: Record<string,number> = {ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7};
+    if (e.key in map) {
+      e.preventDefault();
+      const f = addD(foc, map[e.key]);
+      setFoc(f); setVy(f.getFullYear()); setVm(f.getMonth());
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); commit(foc);
+    } else if (e.key === 'Escape') {
+      setOpen(false);
+    }
+  }
+
+  const displayVal = sel ? `${fmtC(sel)} ${sel.getFullYear()}` : '';
+
+  const panel = (
+    <div ref={pRef} style={{...PANEL_STYLE, top: pos.top, left: pos.left, width: 300}}>
+      <CalGrid vy={vy} vm={vm} lo={sel} hi={sel} focus={foc}
+        onDay={commit} onKey={onKey} onPrev={prevM} onNext={nextM} minDate={minDate ?? null} />
+      {clearable && sel && (
+        <div style={{display:'flex',justifyContent:'flex-end',borderTop:'1px solid var(--th-border)',paddingTop:11}}>
+          <button type="button" onClick={() => { onChange(''); setOpen(false); }}
+            className="text-th-muted hover:text-th-text transition-colors"
+            style={{border:'none',background:'transparent',fontSize:12.5,fontWeight:600,cursor:'pointer',padding:'7px 10px',borderRadius:9}}>
+            Clear
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  const showClear = clearable && !!sel;
+
+  return (
+    <div ref={cRef} className="relative">
+      <div className="relative">
+        <input type="text" readOnly value={displayVal} onClick={() => setOpen(v => !v)}
+          placeholder={placeholder}
+          className="w-full border border-th-border rounded-xl px-3 py-2 pr-9 text-sm text-th-text bg-th-surface cursor-pointer outline-none focus:border-th-subtle transition-colors placeholder:text-th-muted/50"
+          onKeyDown={e => { if (e.key === 'Escape') setOpen(false); }} />
+        {showClear ? (
+          <button type="button" tabIndex={-1} onClick={(e) => { e.stopPropagation(); onChange(''); }}
+            title="Clear date"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-th-muted hover:text-th-text transition-colors">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        ) : (
+          <button type="button" tabIndex={-1} onClick={() => setOpen(v => !v)}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-th-muted hover:text-th-text transition-colors">
+            <CalendarIcon />
+          </button>
+        )}
       </div>
       {open && createPortal(panel, document.body)}
     </div>

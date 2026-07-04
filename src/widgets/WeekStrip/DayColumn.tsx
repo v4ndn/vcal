@@ -165,6 +165,31 @@ export default function DayColumn({
           const evDurVh = Math.max((ev.durationMs / 3_600_000) * HOUR_HEIGHT, SNAP_VH);
           const cStart = Math.max(0, Math.min(24 * HOUR_HEIGHT - SNAP_VH, evStartVh));
           const cEnd = Math.min(24 * HOUR_HEIGHT, cStart + evDurVh);
+          if (ev.type === 'VTODO') {
+            const color = ev.calendarColor ?? '#9ca3af';
+            return (
+              <div
+                key={i}
+                className="absolute left-0.5 right-0.5 rounded-md px-1.5 py-1 z-30 pointer-events-none"
+                style={{
+                  top: `${cStart}vh`,
+                  height: `${cEnd - cStart}vh`,
+                  minHeight: '1.25rem',
+                  backgroundColor: `color-mix(in srgb, ${color} 15%, transparent)`,
+                  border: `2px dashed ${color}`,
+                  opacity: 0.75,
+                }}
+              >
+                <div className="flex items-center gap-1">
+                  <div
+                    className="shrink-0 w-3 h-3 rounded"
+                    style={{ border: `1.5px solid ${color}` }}
+                  />
+                  <span className="text-[11px] font-semibold truncate" style={{ color }}>{ev.summary}</span>
+                </div>
+              </div>
+            );
+          }
           return (
             <div
               key={i}

@@ -3,6 +3,7 @@ import type { MutableRefObject, RefObject } from 'react';
 import type { CalendarEvent } from '../../entities/event/model/types';
 import type { CalendarTask } from '../../entities/task/model/types';
 import { isSameDay } from '../../shared/lib/week';
+import { useCalendarStore } from '../../entities/calendar/model/store';
 import type { DragActive, DragSnapshot, CreateSnap, PendingDrop } from './types';
 
 export interface DragCtx {
@@ -88,6 +89,9 @@ export function createDragHandlers(ctx: DragCtx) {
   ) {
     const colDelta = snap.dayIndex - drag.anchorColIndex;
     const vhDelta = snap.startVh - drag.anchorStartVh;
+    // One undo entry for the whole group move.
+    const n = drag.groupEvents.length;
+    useCalendarStore.getState().beginUndoBatch(`Move ${n} item${n > 1 ? 's' : ''}`);
     for (const ev of drag.groupEvents) {
       const evStartVh = timeToVh(ev.start);
       const evDurVh = ev.end ? durationToVh(ev.start, ev.end) : HOUR_HEIGHT;
@@ -103,6 +107,7 @@ export function createDragHandlers(ctx: DragCtx) {
         await updateEventTime(ev, evNewStart, evNewEnd, 'single');
       }
     }
+    useCalendarStore.getState().commitUndoBatch();
   }
 
   function startMove(e: React.PointerEvent, event: CalendarEvent, colIndex: number) {

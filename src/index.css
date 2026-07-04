@@ -156,7 +156,10 @@
   padding-left: 1.4em;
   margin: 0.2em 0;
 }
+.milkdown-wrap .ProseMirror ul { list-style: disc outside; }
+.milkdown-wrap .ProseMirror ol { list-style: decimal outside; }
 .milkdown-wrap .ProseMirror li { margin: 0.1em 0; }
+.milkdown-wrap .ProseMirror li::marker { color: var(--th-muted); }
 .milkdown-wrap .ProseMirror li > p { margin: 0; }
 
 .milkdown-wrap .ProseMirror li[data-item-type="task"] {
@@ -165,7 +168,6 @@
   align-items: center;
   gap: 0.45em;
   margin-left: -1.4em;
-  cursor: pointer;
 }
 .milkdown-wrap .ProseMirror li[data-item-type="task"]::before {
   content: '';
@@ -179,6 +181,7 @@
   border-radius: 3px;
   flex-shrink: 0;
   background: transparent;
+  cursor: pointer;
   transition: background 0.1s, border-color 0.1s;
 }
 .milkdown-wrap .ProseMirror li[data-item-type="task"][data-checked="true"]::before {

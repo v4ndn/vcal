@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { X, Palette, PanelLeft, BookOpen, FolderUp, Loader2 } from 'lucide-react';
+import { X, Palette, PanelLeft, BookOpen, FolderUp, Loader2, SlidersHorizontal } from 'lucide-react';
 import { Dropdown } from '../../shared/ui/Dropdown';
 import { useThemeStore, PRESET_THEMES, type ThemeValues } from '../../entities/theme/model/store';
 import { useCalendarStore } from '../../entities/calendar/model/store';
@@ -19,10 +19,44 @@ const COLOR_FIELDS: { key: keyof ThemeValues; label: string }[] = [
 ];
 
 const SECTIONS = [
+  { id: 'general' as const, label: 'General', icon: SlidersHorizontal },
   { id: 'theme' as const, label: 'Theme', icon: Palette },
   { id: 'layout' as const, label: 'Layout', icon: PanelLeft },
   { id: 'journal' as const, label: 'Journal', icon: BookOpen },
 ];
+
+function GeneralSection() {
+  const maxUndo = useThemeStore((s) => s.maxUndo);
+  const setMaxUndo = useThemeStore((s) => s.setMaxUndo);
+  const [val, setVal] = useState(String(maxUndo));
+
+  useEffect(() => { setVal(String(maxUndo)); }, [maxUndo]);
+
+  return (
+    <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-th-muted">Max undo limit</p>
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            min={1}
+            max={100}
+            value={val}
+            onChange={(e) => setVal(e.target.value)}
+            onBlur={() => {
+              const n = Number(val);
+              if (!isNaN(n)) setMaxUndo(n);
+              setVal(String(useThemeStore.getState().maxUndo));
+            }}
+            className="w-20 text-center py-1 text-xs"
+          />
+          <span className="text-xs text-th-muted">actions kept for undo (1–100)</span>
+        </div>
+        <p className="text-[11px] text-th-muted">How many recent actions can be reversed with Ctrl+Z.</p>
+      </div>
+    </div>
+  );
+}
 
 
 function ThemeSection() {
@@ -387,6 +421,7 @@ export default function Preferences({ onClose }: Props) {
               className={`px-5${i < SECTIONS.length - 1 ? ' pb-10 border-b border-th-border' : ''}`}
             >
               <p className="text-xs font-bold uppercase tracking-widest text-th-muted mb-6">{label}</p>
+              {id === 'general' && <GeneralSection />}
               {id === 'theme' && <ThemeSection />}
               {id === 'layout' && <LayoutSection />}
               {id === 'journal' && <JournalSection />}

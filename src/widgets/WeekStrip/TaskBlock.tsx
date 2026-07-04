@@ -1,4 +1,3 @@
-import { motion } from 'motion/react';
 import type { CalendarTask } from '../../entities/task/model/types';
 
 interface TaskBlockProps {
@@ -19,7 +18,9 @@ export default function TaskBlock({
   const bgColor = `color-mix(in srgb, ${color} 25%, transparent)`;
 
   return (
-    <motion.div
+    <div
+      data-block-uid={task.uid}
+      data-block-kind="task"
       className={`absolute left-0.5 right-0.5 rounded-md px-1.5 py-1 overflow-hidden z-20 cursor-grab active:cursor-grabbing${isSelected ? ' ring-2 ring-th-accent ring-offset-1 ring-offset-th-bg' : ''}`}
       style={{
         top: `${top}vh`,
@@ -27,10 +28,8 @@ export default function TaskBlock({
         minHeight: '1.25rem',
         backgroundColor: bgColor,
         border: `2px solid ${color}`,
+        opacity: isDragging ? 0 : 1,
       }}
-      initial={{ opacity: 0 }}
-      animate={{ opacity: isDragging ? 0 : 1 }}
-      transition={{ opacity: { duration: isDragging ? 0 : 0.2 } }}
       onPointerDown={onPointerDown}
       onContextMenu={onContextMenu}
     >
@@ -67,6 +66,6 @@ export default function TaskBlock({
           {task.summary}
         </span>
       </div>
-    </motion.div>
+    </div>
   );
 }

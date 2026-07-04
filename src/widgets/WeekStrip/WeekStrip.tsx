@@ -4,8 +4,10 @@ import { useCalendarStore } from '../../entities/calendar/model/store';
 import type { CalendarEvent } from '../../entities/event/model/types';
 import type { CalendarTask } from '../../entities/task/model/types';
 import { getTasks } from '../../shared/lib/getTasks';
+import { parseICSRemindersList } from '../../shared/lib/icsUpdate';
 import { getWeekDays, isSameDay } from '../../shared/lib/week';
 import { usePresetsStore } from '../../entities/presets/model/store';
+import type { TaskPreset } from '../../entities/presets/model/store';
 import { registerWeekGrid } from '../../shared/lib/weekGridRef';
 import { useIsMobile } from '../../shared/lib/useIsMobile';
 import { useUIStore } from '../../entities/ui/model/store';
@@ -54,7 +56,7 @@ export default function WeekStrip() {
   const updateEventTime = useCalendarStore((s) => s.updateEventTime);
   const deleteEvent = useCalendarStore((s) => s.deleteEvent);
   const deleteEvents = useCalendarStore((s) => s.deleteEvents);
-  const createEvent = useCalendarStore((s) => s.createEvent);
+  const createNewEvent = useCalendarStore((s) => s.createNewEvent);
 
   const isMobile = useIsMobile();
   const setSidebarOpen = useUIStore((s) => s.setSidebarOpen);
@@ -78,6 +80,8 @@ export default function WeekStrip() {
   const days = getWeekDays(weekOffset);
   const [now, setNow] = useState(() => new Date());
   const prevOffset = useRef(weekOffset);
+  const weekOffsetRef = useRef(weekOffset);
+  weekOffsetRef.current = weekOffset;
 
   const [mobileDayIndex, setMobileDayIndex] = useState(() => {
     const idx = getWeekDays(0).findIndex((d) => isSameDay(d, new Date()));
@@ -114,6 +118,7 @@ export default function WeekStrip() {
   const clipboard = usePresetsStore((s) => s.clipboard);
   const setClipboard = usePresetsStore((s) => s.setClipboard);
   const activeDragPreset = usePresetsStore((s) => s.activeDragPreset);
+  const setActiveDragPreset = usePresetsStore((s) => s.setActiveDragPreset);
   const [presetDropPreview, setPresetDropPreview] = useState<{ dropColIdx: number; dropVh: number } | null>(null);
   const presetDropPreviewRef = useRef<{ dropColIdx: number; dropVh: number } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; event: CalendarEvent } | null>(null);
@@ -128,6 +133,50 @@ export default function WeekStrip() {
   const touchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const touchContextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const shouldPreventScrollRef = useRef(false);
+  const [marquee, setMarquee] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+
+  // Ctrl/Cmd + drag on empty grid = rubber-band select the events/tasks it covers.
+  function startMarquee(e: React.PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let moved = false;
+
+    function onMove(me: PointerEvent) {
+      if (!moved && Math.abs(me.clientX - x0) < 4 && Math.abs(me.clientY - y0) < 4) return;
+      moved = true;
+      setMarquee({
+        left: Math.min(x0, me.clientX),
+        top: Math.min(y0, me.clientY),
+        width: Math.abs(me.clientX - x0),
+        height: Math.abs(me.clientY - y0),
+      });
+    }
+    function onUp(ue: PointerEvent) {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      setMarquee(null);
+      if (!moved) return;
+      const mLeft = Math.min(x0, ue.clientX);
+      const mTop = Math.min(y0, ue.clientY);
+      const mRight = Math.max(x0, ue.clientX);
+      const mBottom = Math.max(y0, ue.clientY);
+      const evUids = new Set<string>();
+      const taskUids = new Set<string>();
+      scrollRef.current?.querySelectorAll<HTMLElement>('[data-block-uid]').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        if (r.left < mRight && r.right > mLeft && r.top < mBottom && r.bottom > mTop) {
+          const uid = el.dataset.blockUid!;
+          if (el.dataset.blockKind === 'task') taskUids.add(uid); else evUids.add(uid);
+        }
+      });
+      setSelectedUids(evUids);
+      setSelectedTaskUids(taskUids);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
 
   const updateTaskTime = useCallback(async (uid: string, newStart: Date, newDue: Date | undefined) => {
     const task = allTasks.find((t) => t.uid === uid);
@@ -188,19 +237,36 @@ export default function WeekStrip() {
   }, []);
 
   useEffect(() => {
-    const lastNav = { t: 0 };
+    // Accumulate wheel delta and flip a week once it crosses a threshold, then
+    // lock until the wheel goes idle. This fires immediately on the first scroll
+    // (no time throttle) while coalescing trackpad momentum into one week per swipe.
+    const THRESHOLD = 40;
+    let acc = 0;
+    let locked = false;
+    let idle: ReturnType<typeof setTimeout> | null = null;
+
     function onWheel(e: WheelEvent) {
       if (!e.shiftKey) return;
       e.preventDefault();
-      const now = Date.now();
-      if (now - lastNav.t < 400) return;
-      lastNav.t = now;
-      const delta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
-      const { weekOffset: off } = useCalendarStore.getState();
-      setWeekOffset(delta < 0 ? off - 1 : off + 1);
+      const delta = Math.abs(e.deltaY) >= Math.abs(e.deltaX) ? e.deltaY : e.deltaX;
+
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(() => { locked = false; acc = 0; }, 100);
+
+      if (locked) return;
+      acc += delta;
+      if (Math.abs(acc) >= THRESHOLD) {
+        const { weekOffset: off } = useCalendarStore.getState();
+        setWeekOffset(acc < 0 ? off - 1 : off + 1);
+        acc = 0;
+        locked = true;
+      }
     }
     window.addEventListener('wheel', onWheel, { passive: false });
-    return () => window.removeEventListener('wheel', onWheel);
+    return () => {
+      window.removeEventListener('wheel', onWheel);
+      if (idle) clearTimeout(idle);
+    };
   }, []);
 
   useEffect(() => {
@@ -272,19 +338,121 @@ export default function WeekStrip() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement;
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t.isContentEditable) return;
+
       if (e.key === 'Escape') {
         setSelectedUids(new Set());
         setSelectedTaskUids(new Set());
+
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
-        const sel = events.filter((ev) => selectedUids.has(ev.uid));
-        if (sel.length) setClipboard(sel);
+        const selEvents = events.filter((ev) => selectedUids.has(ev.uid));
+        const selTasks = visibleTasks.filter((t) => selectedTaskUids.has(t.uid) && t.start != null);
+        // taskToEvent forces allDay:false; restore the task's real allDay so
+        // date-only todos paste as all-day instead of midnight-timed.
+        const combined = [...selEvents, ...selTasks.map((t) => ({ ...taskToEvent(t), allDay: t.allDay }))];
+        if (combined.length) setClipboard(combined);
+
       } else if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
-        clipboard.forEach((ev) => createEvent(ev));
+        if (!clipboard.length) return;
+
+        const anchorMs = Math.min(...clipboard.map((ev) => ev.start.getTime()));
+        const clipPreset: TaskPreset = {
+          id: '__clipboard__',
+          name: `${clipboard.length} item${clipboard.length > 1 ? 's' : ''}`,
+          events: clipboard.map((ev) => {
+            // Reminders live as VALARMs in the source ICS, not on CalendarEvent — pull them so paste keeps them.
+            const srcItem = useCalendarStore.getState().items.find((i) => i.component.uid === ev.baseUid);
+            const reminders = srcItem ? parseICSRemindersList(srcItem.rawData) : [];
+            return {
+              summary: ev.summary,
+              description: ev.description ?? '',
+              offsetMs: ev.start.getTime() - anchorMs,
+              durationMs: ev.end ? ev.end.getTime() - ev.start.getTime() : 3_600_000,
+              rrule: '',
+              reminders,
+              calendarName: ev.calendarName,
+              calendarColor: ev.calendarColor,
+              type: ev.type,
+              allDay: ev.allDay ?? false,
+            };
+          }),
+        };
+
+        setActiveDragPreset(clipPreset);
+
+        let settled = false;
+        function settle() {
+          if (settled) return;
+          settled = true;
+          window.removeEventListener('keyup', onKeyUp);
+          window.removeEventListener('pointerup', onPointerUp);
+          setActiveDragPreset(null);
+          const pos = presetDropPreviewRef.current;
+          if (!pos) return;
+          const days = getWeekDays(weekOffsetRef.current);
+          const anchorDay = new Date(days[pos.dropColIdx]);
+          anchorDay.setHours(0, 0, 0, 0);
+          const anchorStart = new Date(anchorDay.getTime() + (pos.dropVh / HOUR_HEIGHT) * 3_600_000);
+          const firstTimedOffset = clipPreset.events.find((ev) => !ev.allDay)?.offsetMs ?? 0;
+          const n = clipPreset.events.length;
+          useCalendarStore.getState().beginUndoBatch(`Paste ${n} item${n > 1 ? 's' : ''}`);
+          for (const presetEv of clipPreset.events) {
+            let evStart: Date;
+            let evEnd: Date | undefined;
+            if (presetEv.allDay) {
+              // Place on the correct day via day-count offset; ignore mouse Y.
+              const dayOffset = Math.round(presetEv.offsetMs / 86_400_000);
+              const targetDay = new Date(anchorDay);
+              targetDay.setDate(targetDay.getDate() + dayOffset);
+              targetDay.setHours(0, 0, 0, 0);
+              evStart = targetDay;
+              evEnd = new Date(targetDay);
+              evEnd.setDate(evEnd.getDate() + 1);
+            } else {
+              evStart = new Date(anchorStart.getTime() + (presetEv.offsetMs - firstTimedOffset));
+              evEnd = presetEv.durationMs > 0 ? new Date(evStart.getTime() + presetEv.durationMs) : undefined;
+            }
+            createNewEvent(presetEv.calendarName, {
+              summary: presetEv.summary,
+              start: evStart,
+              end: evEnd,
+              description: presetEv.description,
+              rrule: '',
+              reminders: presetEv.reminders ?? [],
+              type: presetEv.type,
+              allDay: presetEv.allDay,
+            }).catch(console.error);
+          }
+          useCalendarStore.getState().commitUndoBatch();
+        }
+        function onKeyUp(ku: KeyboardEvent) {
+          if (ku.key === 'Control' || ku.key === 'Meta' || ku.key === 'v' || ku.key === 'V') settle();
+        }
+        function onPointerUp() { settle(); }
+        window.addEventListener('keyup', onKeyUp);
+        window.addEventListener('pointerup', onPointerUp, { once: true });
+
+      } else if (e.key === 'n' || e.key === 'N') {
+        const now = new Date();
+        const m = now.getMinutes() < 30 ? 30 : 0;
+        const h = now.getMinutes() < 30 ? now.getHours() : now.getHours() + 1;
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+        const end = new Date(start.getTime() + 3_600_000);
+        setPendingCreate({ start, end });
+
+      } else if (e.key === 't' || e.key === 'T') {
+        setWeekOffset(0);
+      } else if (e.key === 'ArrowLeft' && !e.shiftKey) {
+        setWeekOffset(weekOffset - 1);
+      } else if (e.key === 'ArrowRight' && !e.shiftKey) {
+        setWeekOffset(weekOffset + 1);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [events, selectedUids, clipboard, createEvent, setSelectedTaskUids]);
+  }, [events, visibleTasks, selectedUids, selectedTaskUids, clipboard, setClipboard, setSelectedTaskUids,
+      createNewEvent, setActiveDragPreset, HOUR_HEIGHT, weekOffset, setWeekOffset, setPendingCreate]);
 
   return (
     <div className={`flex ${calendarHeaderBottom ? 'flex-col-reverse' : 'flex-col'} h-full bg-th-bg select-none`}>
@@ -389,6 +557,7 @@ export default function WeekStrip() {
                   activeDragPreset={activeDragPreset}
                   onPointerDown={(e) => {
                     if (e.pointerType === 'touch') { startCreateTouch(e, colIdx); return; }
+                    if (e.ctrlKey || e.metaKey) { startMarquee(e); return; }
                     setSelectedUids(new Set());
                     setSelectedTaskUids(new Set());
                     startCreate(e, colIdx);
@@ -503,6 +672,13 @@ export default function WeekStrip() {
             deleteEvent(ev, scope);
           }}
           onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {marquee && (
+        <div
+          className="fixed z-[60] border border-th-accent bg-th-accent/15 pointer-events-none rounded-sm"
+          style={{ left: marquee.left, top: marquee.top, width: marquee.width, height: marquee.height }}
         />
       )}
 

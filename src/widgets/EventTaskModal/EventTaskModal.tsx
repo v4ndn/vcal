@@ -12,7 +12,7 @@ import Modal from '../../shared/ui/Modal';
 import Button from '../../shared/ui/Button';
 import { Input } from '../../shared/ui/Input';
 import { MarkdownEditor } from '../../shared/ui/MarkdownEditor';
-import { DateRangePicker, DateRangeOnlyPicker } from '../../shared/ui/DateRangePicker';
+import { DateRangePicker, DateRangeOnlyPicker, DatePicker } from '../../shared/ui/DateRangePicker';
 import { Dropdown } from '../../shared/ui/Dropdown';
 import { RemindersField } from '../../shared/ui/RemindersField';
 import Field from '../../shared/ui/Field';
@@ -49,6 +49,30 @@ function rruleToPreset(raw: string): string {
   return found ? found.value : '__custom__';
 }
 
+// Separate a RRULE's UNTIL clause from the rest of the rule.
+function splitRruleUntil(rrule: string): { base: string; until: string } {
+  const parts = rrule.split(';').filter(Boolean);
+  const untilPart = parts.find((p) => p.toUpperCase().startsWith('UNTIL='));
+  const base = parts.filter((p) => !p.toUpperCase().startsWith('UNTIL=')).join(';');
+  return { base, until: untilPart ? untilPart.slice(untilPart.indexOf('=') + 1) : '' };
+}
+
+// ICS UNTIL value (YYYYMMDD or YYYYMMDDTHHMMSSZ) → 'YYYY-MM-DD' for the date input.
+function untilToDateStr(until: string): string {
+  const m = until.match(/^(\d{4})(\d{2})(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-${m[3]}` : '';
+}
+
+// 'YYYY-MM-DD' → ICS UNTIL value. All-day → DATE; timed → end-of-day UTC datetime.
+function dateStrToUntil(dateStr: string, allDay: boolean): string {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const p = (n: number) => String(n).padStart(2, '0');
+  if (allDay) return `${y}${p(m)}${p(d)}`;
+  // Last moment of the chosen day, expressed in UTC as RFC 5545 requires when DTSTART is timed.
+  const dt = new Date(y, m - 1, d, 23, 59, 59);
+  return dt.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+}
+
 // ── types ─────────────────────────────────────────────────────────────────────
 
 type FormValues = {
@@ -57,6 +81,7 @@ type FormValues = {
   end: string;
   rrulePreset: string;
   rruleCustom: string;
+  recurUntil: string;
 };
 
 export type Props =
@@ -84,7 +109,9 @@ export default function EventTaskModal(props: Props) {
 
   // Store
   const items              = useCalendarStore((s) => s.items);
-  const calendars          = useCalendarStore((s) => s.calendars);
+  const allCalendars       = useCalendarStore((s) => s.calendars);
+  // Only collections that accept events/tasks (a collection may also be a journal).
+  const calendars          = allCalendars.filter((c) => c.isCalendar);
   const createNewEvent     = useCalendarStore((s) => s.createNewEvent);
   const updateEventDetails = useCalendarStore((s) => s.updateEventDetails);
   const updateTaskDetails  = useCalendarStore((s) => s.updateTaskDetails);
@@ -113,6 +140,7 @@ export default function EventTaskModal(props: Props) {
       end:         isEditing ? '' : toDatetimeLocal(createEnd),
       rrulePreset: '',
       rruleCustom: '',
+      recurUntil:  '',
     },
   });
 
@@ -125,6 +153,7 @@ export default function EventTaskModal(props: Props) {
       if (!item) return;
       const raw   = item.rawData;
       const rrule = parseICSRrule(raw);
+      const { base, until } = splitRruleUntil(rrule);
       const isAD  = parseICSIsAllDay(raw);
       const desc  = parseICSDescription(raw, isRecurring ? editEvent.occurrenceStart ?? editEvent.start : undefined);
       setReminders(parseICSRemindersList(raw));
@@ -136,8 +165,9 @@ export default function EventTaskModal(props: Props) {
         summary:     editEvent.summary,
         start:       toDatetimeLocal(editEvent.start),
         end:         editEvent.end ? toDatetimeLocal(isAD ? subOneDay(editEvent.end) : editEvent.end) : '',
-        rrulePreset: rruleToPreset(rrule),
-        rruleCustom: rrule,
+        rrulePreset: rruleToPreset(base),
+        rruleCustom: base,
+        recurUntil:  untilToDateStr(until),
       });
     } else if (editTask) {
       const item = items.find((i) => i.component.uid === editTask.uid && i.component.type === 'VTODO');
@@ -158,6 +188,7 @@ export default function EventTaskModal(props: Props) {
         end:         toDatetimeLocal(isAD && due ? subOneDay(due) : due),
         rrulePreset: rruleToPreset(rrule),
         rruleCustom: rrule,
+        recurUntil:  '',
       });
     }
   }, [editEvent?.baseUid, editTask?.uid, items]);
@@ -165,9 +196,26 @@ export default function EventTaskModal(props: Props) {
   const rrulePreset = watch('rrulePreset');
   const start       = watch('start');
   const end         = watch('end');
+  const recurUntil  = watch('recurUntil');
+  const isRecurringRule = isEvent && rrulePreset !== '';
+
+  // Change the recurrence start date without losing the event's time-of-day; shift end to keep duration.
+  function setRecurStart(dateStr: string) {
+    if (!dateStr) return;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const oldStart = start ? new Date(start) : new Date();
+    const newStart = new Date(y, m - 1, d, oldStart.getHours(), oldStart.getMinutes(), 0);
+    const delta = newStart.getTime() - oldStart.getTime();
+    setValue('start', toDatetimeLocal(newStart));
+    if (end) setValue('end', toDatetimeLocal(new Date(new Date(end).getTime() + delta)));
+  }
 
   async function onSubmit(data: FormValues) {
-    const rrule   = data.rrulePreset === '__custom__' ? data.rruleCustom : data.rrulePreset;
+    const baseRrule = data.rrulePreset === '__custom__' ? data.rruleCustom : data.rrulePreset;
+    let rrule = baseRrule;
+    if (isEvent && baseRrule && data.recurUntil && !/UNTIL=/i.test(baseRrule)) {
+      rrule = `${baseRrule};UNTIL=${dateStrToUntil(data.recurUntil, allDay)}`;
+    }
     const endDate = data.end ? (allDay ? addOneDay(new Date(data.end)) : new Date(data.end)) : undefined;
 
     if (mode === 'create') {
@@ -222,7 +270,7 @@ export default function EventTaskModal(props: Props) {
   const calColor = calendars.find((c) => c.name === targetCal)?.color;
 
   return (
-    <Modal onClose={onClose} className="w-full max-w-[680px] max-h-[90vh] flex flex-col overflow-hidden">
+    <Modal onClose={onClose} className="w-[50vw] max-h-[90vh] flex flex-col overflow-hidden">
       <div className="flex items-center justify-between px-5 pt-5 pb-4 border-b border-th-border shrink-0">
         <div>
           <p className="text-[10px] font-semibold uppercase tracking-widest text-th-muted">{headerLabel}</p>
@@ -312,6 +360,29 @@ export default function EventTaskModal(props: Props) {
                 />
               )}
             </Field>
+          )}
+
+          {/* Recurrence window — only for repeating events */}
+          {isRecurringRule && (
+            <div className="flex flex-col gap-3 pt-1 border-t border-th-border">
+              <input type="hidden" {...register('recurUntil')} />
+              <Field label="Starts on">
+                <DatePicker
+                  value={start ? start.slice(0, 10) : ''}
+                  onChange={setRecurStart}
+                  placeholder="Select start date"
+                />
+              </Field>
+              <Field label="Repeat until">
+                <DatePicker
+                  value={recurUntil}
+                  onChange={(d) => setValue('recurUntil', d)}
+                  minDate={start ? new Date(start) : undefined}
+                  placeholder="Repeat forever"
+                  clearable
+                />
+              </Field>
+            </div>
           )}
 
           <Field label="Reminders">

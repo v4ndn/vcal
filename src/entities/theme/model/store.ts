@@ -76,6 +76,7 @@ interface ThemeStore {
   calendarHeaderBottom: boolean;
   hideScrollbars: boolean;
   journalSidebarWidth: number;
+  maxUndo: number;
   setActiveId: (id: string) => void;
   applyPreset: (preset: PresetTheme) => void;
   setCustomValue: (key: keyof ThemeValues, value: string) => void;
@@ -85,6 +86,7 @@ interface ThemeStore {
   setCalendarHeaderBottom: (v: boolean) => void;
   setHideScrollbars: (v: boolean) => void;
   setJournalSidebarWidth: (w: number) => void;
+  setMaxUndo: (n: number) => void;
 }
 
 export const useThemeStore = create<ThemeStore>()(
@@ -98,6 +100,7 @@ export const useThemeStore = create<ThemeStore>()(
       calendarHeaderBottom: false,
       hideScrollbars: false,
       journalSidebarWidth: 224,
+      maxUndo: 20,
 
       setActiveId: (id) => set({ activeId: id }),
 
@@ -116,6 +119,7 @@ export const useThemeStore = create<ThemeStore>()(
       setCalendarHeaderBottom: (v) => set({ calendarHeaderBottom: v }),
       setHideScrollbars: (v) => set({ hideScrollbars: v }),
       setJournalSidebarWidth: (w) => set({ journalSidebarWidth: Math.max(160, Math.min(480, w)) }),
+      setMaxUndo: (n) => set({ maxUndo: Math.max(1, Math.min(100, Math.round(n) || 1)) }),
     }),
     { name: 'vcalendar-theme' },
   ),

@@ -2,7 +2,8 @@ export interface CalendarMeta {
   name: string;
   color?: string;
   url: string;
-  isJournal?: boolean;
+  isJournal?: boolean;  // supports VJOURNAL (can hold notes)
+  isCalendar?: boolean; // supports VEVENT/VTODO (can hold events/tasks)
 }
 
 export interface StoredComponent {
